@@ -1,0 +1,51 @@
+{
+  "name": "clipvault",
+  "version": "1.1.0",
+  "main": "expo-router/entry",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "postinstall": "patch-package",
+    "typecheck": "tsc --noEmit",
+    "prebuild:android": "expo prebuild --platform android --no-install",
+    "android:bundle": "cd android && gradlew.bat :app:bundleRelease",
+    "android:verify-play": "cd android && gradlew.bat :app:verifyPlayReleaseConfig",
+    "build:android": "eas build --platform android --profile preview",
+    "build:ios": "eas build --platform ios"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "1.23.1",
+    "@react-native/virtualized-lists": "^0.74.87",
+    "@shopify/flash-list": "1.6.4",
+    "@types/react": "~18.2.79",
+    "crypto-js": "^4.2.0",
+    "expo": "~51.0.0",
+    "expo-clipboard": "~6.0.0",
+    "expo-crypto": "~13.0.0",
+    "expo-document-picker": "~12.0.2",
+    "expo-file-system": "~17.0.0",
+    "expo-haptics": "~13.0.0",
+    "expo-linking": "~6.3.1",
+    "expo-local-authentication": "~14.0.1",
+    "expo-notifications": "~0.28.0",
+    "expo-print": "~13.0.1",
+    "expo-router": "~3.5.0",
+    "expo-secure-store": "~13.0.2",
+    "expo-sharing": "~12.0.0",
+    "expo-status-bar": "~1.12.1",
+    "firebase": "^10.12.0",
+    "react": "18.2.0",
+    "react-native": "0.74.5",
+    "react-native-safe-area-context": "4.10.5",
+    "react-native-screens": "3.31.1",
+    "zustand": "^4.5.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@types/crypto-js": "^4.2.2",
+    "patch-package": "^8.0.1",
+    "typescript": "^5.1.0"
+  }
+}

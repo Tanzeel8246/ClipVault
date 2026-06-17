@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="ur">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ClipVault — Privacy Policy / پرائیویسی پالیسی</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Nastaliq+Urdu:wght@400;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --accent: #10b981;
+            --bg-dark: #0f172a;
+            --bg-card: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #334155;
+            --red: #ef4444;
+        }
+
+        [data-theme="light"] {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --accent: #059669;
+            --bg-dark: #f8fafc;
+            --bg-card: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --red: #dc2626;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            transition: background-color 0.3s, border-color 0.3s, color 0.3s;
+        }
+
+        body {
+            font-family: 'Outfit', 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 0;
+            margin: 0;
+        }
+
+        .urdu-text {
+            font-family: 'Noto Nastaliq Urdu', 'Inter', sans-serif;
+            line-height: 2.2;
+            direction: rtl;
+            text-align: right;
+        }
+
+        /* Nav Header */
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: rgba(30, 41, 59, 0.7);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        [data-theme="light"] header {
+            background: rgba(255, 255, 255, 0.7);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 700;
+            font-size: 1.4rem;
+            color: var(--text-main);
+            text-decoration: none;
+        }
+
+        .logo span {
+            color: var(--primary);
+        }
+
+        .nav-controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .btn-toggle {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            padding: 0.5rem 1rem;
+            border-radius: 30px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .btn-toggle:hover {
+            border-color: var(--primary);
+        }
+
+        .btn-lang {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 0.5rem 1.2rem;
+            border-radius: 30px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .btn-lang:hover {
+            background: var(--primary-hover);
+        }
+
+        /* Hero Container */
+        .hero {
+            padding: 4rem 2rem 2rem 2rem;
+            text-align: center;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .hero h1 {
+            font-size: 2.8rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero p {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        /* Main Layout */
+        .container {
+            max-width: 1000px;
+            margin: 0 auto 5rem auto;
+            padding: 0 1.5rem;
+        }
+
+        .lang-section {
+            display: none;
+        }
+
+        .lang-section.active {
+            display: block;
+            animation: fadeIn 0.4s ease-in-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Card Section */
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 2.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.05);
+        }
+
+        .section-title {
+            font-size: 1.6rem;
+            margin-bottom: 1.5rem;
+            color: var(--primary);
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card p, .card ul {
+            margin-bottom: 1.2rem;
+            color: var(--text-main);
+        }
+
+        .card ul {
+            padding-left: 1.5rem;
+        }
+
+        .card li {
+            margin-bottom: 0.5rem;
+        }
+
+        /* Highlights & Alerts */
+        .alert-box {
+            background: rgba(99, 102, 241, 0.1);
+            border-left: 4px solid var(--primary);
+            padding: 1.2rem;
+            border-radius: 8px;
+            margin: 1.5rem 0;
+            color: var(--text-main);
+        }
+
+        [dir="rtl"] .alert-box {
+            border-left: none;
+            border-right: 4px solid var(--primary);
+        }
+
+        .badge {
+            background-color: rgba(16, 185, 129, 0.15);
+            color: var(--accent);
+            padding: 0.3rem 0.8rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            display: inline-block;
+            margin-bottom: 1rem;
+        }
+
+        /* Footer */
+        footer {
+            text-align: center;
+            padding: 3rem 0;
+            border-top: 1px solid var(--border);
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        footer a {
+            color: var(--primary);
+            text-decoration: none;
+        }
+
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            header {
+                padding: 1rem;
+            }
+            .hero h1 {
+                font-size: 2rem;
+            }
+            .card {
+                padding: 1.5rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <a href="#" class="logo">
+            <span>📋</span> ClipVault
+        </a>
+        <div class="nav-controls">
+            <button class="btn-toggle" onclick="toggleTheme()" id="themeBtn">
+                🌙 Theme
+            </button>
+            <button class="btn-lang" onclick="toggleLanguage()" id="langBtn">
+                اردو میں پڑھیں
+            </button>
+        </div>
+    </header>
+
+    <div class="hero">
+        <span class="badge">Privacy First / نجی اور محفوظ</span>
+        <h1 id="heroTitle">Privacy Policy</h1>
+        <p id="heroSubtitle">Last updated: June 11, 2026. Your privacy and data security are our top priorities.</p>
+    </div>
+
+    <div class="container">
+        
+        <!-- ================= ENGLISH SECTION ================= -->
+        <div id="enSection" class="lang-section active">
+            
+            <div class="card">
+                <h2 class="section-title">1. Introduction</h2>
+                <p>Welcome to <strong>ClipVault</strong>, developed by <strong>MindCrafts_AI</strong>. We respect your privacy and are committed to protecting your personal data. This Privacy Policy explains how our mobile application handles clipboard data, inputs, voice typing, and backup operations. ClipVault is designed as a <strong>local-first</strong> productivity utility, meaning we prioritize keeping your private data strictly on your physical device.</p>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">2. Clipboard Monitoring & Keystroke Input</h2>
+                <p>Because modern versions of Android (Android 10 and above) restrict background applications from accessing clipboard data, ClipVault provides a custom Input Method / Keyboard service (<strong>VaultBoard</strong>).</p>
+                <ul>
+                    <li><strong>Clipboard Auto-Save:</strong> When you enable and use the VaultBoard keyboard, any text copy actions you perform are detected and stored automatically inside the application's local SQLite database.</li>
+                    <li><strong>Keystroke Tracking:</strong> VaultBoard processes your keystrokes purely on-device to input text into target text fields. We do <strong>not</strong> record, log, trace, or transmit your individual keystrokes or typing history to any remote server or third party.</li>
+                    <li><strong>Sensitive Data Masking:</strong> The app automatically detects sensitive details like One-Time Passwords (OTPs), passwords, and credit card numbers. By default, these clips are visually masked in the application and settings can be set to auto-delete them after a short period.</li>
+                </ul>
+                <div class="alert-box">
+                    <strong>Important Note on Privacy:</strong> All clipboard capture and processing occur 100% locally. We do not maintain any cloud databases that store your copied clips.
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">3. Microphone & Voice Typing</h2>
+                <p>ClipVault offers a voice-to-text (voice typing) function via the microphone button on the custom keyboard.</p>
+                <ul>
+                    <li><strong>On-Device Speech Processing:</strong> When you use voice typing, your voice input is processed locally or using the native Android SpeechRecognizer APIs.</li>
+                    <li><strong>No Audio Storage:</strong> Audio recordings are processed in real-time to generate text and are <strong>never stored</strong> or uploaded to MindCrafts_AI servers. Voice data remains completely volatile and is discarded instantly after transcription.</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">4. Google Drive Cloud Backup</h2>
+                <p>ClipVault offers an <em>optional</em> cloud backup service using your Google Drive account.</p>
+                <ul>
+                    <li><strong>Isolated App Folder:</strong> If you explicitly log in via Google Sign-In and enable backup, your clipboard database is backed up to a dedicated folder in your Google Drive storage (specifically the <code>drive.appdata</code> scope).</li>
+                    <li><strong>Hidden from View:</strong> This directory is completely hidden from standard Google Drive browser views and can only be accessed by ClipVault.</li>
+                    <li><strong>Zero Developer Access:</strong> MindCrafts_AI has no server-side access to your Google credentials, auth tokens, or backups. The connection is direct between your mobile device and Google's servers.</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">5. Security, Passwords & Biometrics</h2>
+                <p>To secure your saved clipboard items, you can enable the application lock using your device's biometric security (fingerprint/face recognition) or system security PIN/password.</p>
+                <ul>
+                    <li><strong>System-Managed Security:</strong> ClipVault uses Android's native Keyguard and BiometricPrompt APIs. The app <strong>never collects, accesses, or stores</strong> your biometric prints or system passwords. All validation is handled securely by the Android OS.</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">6. Data Deletion and Control</h2>
+                <p>You have full, absolute control over your data:</p>
+                <ul>
+                    <li><strong>Local Wipe:</strong> You can clear individual clips, delete categories, or execute a "Panic Clean" (to instantly delete all flagged sensitive clips) in Settings.</li>
+                    <li><strong>Google Drive Removal:</strong> You can disconnect your Google account from the app Settings at any time, which halts auto-backups. You can also purge the backups stored in Google Drive.</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">7. Browser Extension (Urdu Customizer & Sync)</h2>
+                <p>ClipVault offers a companion desktop browser extension. Its core functionalities operate fully locally, prioritizing your privacy:</p>
+                <ul>
+                    <li><strong>Font Customization:</strong> The extension modifies website fonts to display Nastaleeq or other Urdu fonts locally on your computer. It does not send website content or browsing history to any remote server.</li>
+                    <li><strong>Clipboard Capture:</strong> Clips copied on your computer are saved strictly to the extension's local storage in your browser.</li>
+                    <li><strong>Cloud Syncing:</strong> If you explicitly sign in via Google, the extension syncs your local clipboard with your mobile app via an isolated Google Drive AppData folder. This is a direct device-to-Google connection with zero developer access.</li>
+                    <li><strong>Screen Recording:</strong> Screen capture or video recording functionalities operate entirely locally within your browser tab. Recordings are saved directly to your local downloads folder and are never uploaded to any cloud server.</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title">8. Contact Us</h2>
+                <p>If you have any questions or feedback regarding this Privacy Policy, please feel free to reach out to us:</p>
+                <ul>
+                    <li>WhatsApp Support: <a href="https://wa.me/923023448246" target="_blank" style="color: var(--primary); text-decoration: none;">+92 302 3448246</a></li>
+                    <li>Official Website: <a href="https://mindcrafts.net" target="_blank" style="color: var(--primary); text-decoration: none;">mindcrafts.net</a> or <a href="https://codehubb.com" target="_blank" style="color: var(--primary); text-decoration: none;">codehubb.com</a></li>
+                </ul>
+            </div>
+
+        </div>
+
+        <!-- ================= URDU SECTION ================= -->
+        <div id="urSection" class="lang-section urdu-text">
+            
+            <div class="card">
+                <h2 class="section-title" style="justify-content: flex-start; gap: 10px;">
+                    <span>۱۔ تعارف</span>
+                </h2>
+                <p><strong>ClipVault</strong> میں خوش آمدید، جسے <strong>MindCrafts_AI</strong> نے تیار کیا ہے۔ ہم آپ کی پرائیویسی کا احترام کرتے ہیں اور آپ کے ذاتی ڈیٹا کو محفوظ رکھنے کے لیے پرعزم ہیں۔ یہ پرائیویسی پالیسی وضاحت کرتی ہے کہ ہماری موبائل ایپلی کیشن آپ کے کاپی شدہ ٹیکسٹ (کلپ بورڈ)، کی بورڈ ان پٹس، آواز کی ٹائپنگ (مائیک) اور بیک اپ ڈیٹا کو کس طرح ہینڈل کرتی ہے۔ ClipVault ایک <strong>لوکل فرسٹ (local-first)</strong> ایپ ہے، جس کا مطلب ہے کہ ہماری پہلی ترجیح آپ کا ڈیٹا صرف اور صرف آپ کے اپنے موبائل فون پر محفوظ رکھنا ہے۔</p>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title" style="justify-content: flex-start; gap: 10px;">
+                    <span>۲۔ کلپ بورڈ مانیٹرنگ اور کی بورڈ ان پٹ</span>
+                </h2>
+                <p>چونکہ اینڈرائیڈ کے جدید ورژنز (Android 10 اور اس سے اوپر) بیک گراؤنڈ ایپلی کیشنز کو کلپ بورڈ ڈیٹا پڑھنے سے روکتے ہیں، اس لیے ClipVault اپنا مخصوص کی بورڈ (<strong>VaultBoard</strong>) فراہم کرتی ہے۔</p>
+                <ul>
+                    <li><strong>خودکار کلپ سیونگ:</strong> جب آپ والٹ بورڈ کی بورڈ کو فعال اور منتخب کرتے ہیں، تو آپ کا کاپی کیا گیا کوئی بھی مواد خود بخود ایپ کے مقامی SQLite ڈیٹا بیس میں محفوظ ہو جاتا ہے۔</li>
+                    <li><strong>کی اسٹروک ٹریکنگ:</strong> والٹ بورڈ کی بورڈ پر کی جانے والی ٹائپنگ صرف عارضی طور پر اور آپ کے موبائل پر ہی پروسیس ہوتی ہے۔ ہم آپ کے لکھے گئے الفاظ یا ہسٹری کو کسی بھی ریموٹ سرور یا کسی تیسرے فریق کو کبھی بھی نہیں بھیجتے۔</li>
+                    <li><strong>حساس ڈیٹا کو چھپانا:</strong> یہ ایپلی کیشن خودکار طور پر حساس معلومات جیسے او ٹی پی (OTP)، پاس ورڈز، اور کریڈٹ کارڈ نمبرز کی شناخت کرتی ہے۔ انہیں ایپ میں ڈیفالٹ کے طور پر چھپا کر رکھا جاتا ہے اور ترتیبات سے آپ اسے خودکار حذف کرنے پر بھی سیٹ کر سکتے ہیں۔</li>
+                </ul>
+                <div class="alert-box">
+                    <strong>اہم وضاحت:</strong> تمام کلپ بورڈ کیپچرنگ اور پروسیسنگ 100٪ مقامی (لوکل) ہوتی ہے۔ ہمارے پاس کوئی ایسا سرور نہیں ہے جہاں آپ کا کاپی شدہ مواد جا کر اسٹور ہوتا ہو۔
+                </div>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title" style="justify-content: flex-start; gap: 10px;">
+                    <span>۳۔ مائیکروفون اور وائس ٹائپنگ</span>
+                </h2>
+                <p>ClipVault کی بورڈ کے مائیکروفون بٹن کے ذریعے آواز سے لکھنے (وائس ٹائپنگ) کی سہولت فراہم کرتی ہے۔</p>
+                <ul>
+                    <li><strong>لوکل اسپیچ پروسیسنگ:</strong> جب آپ مائیک بٹن دبا کر بولتے ہیں، تو اینڈرائیڈ کی اپنی اسپیچ ریکگنیشن سروس اسے الفاظ میں تبدیل کرتی ہے۔</li>
+                    <li><strong>آواز کا محفوظ نہ ہونا:</strong> آپ کی آواز کی ریکارڈنگز کو رئیل ٹائم میں پروسیس کیا جاتا ہے، انہیں <strong>کبھی بھی ریکارڈ یا اسٹور نہیں کیا جاتا</strong> اور نہ ہی مائنڈ کرافٹس اے آئی کے سرورز پر اپلوڈ کیا جاتا ہے۔</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title" style="justify-content: flex-start; gap: 10px;">
+                    <span>۴۔ گوگل ڈرائیو کلاؤڈ بیک اپ</span>
+                </h2>
+                <p>ClipVault آپ کے اپنے گوگل ڈرائیو اکاؤنٹ کو استعمال کرتے ہوئے <em>اختیاری</em> کلاؤڈ بیک اپ کی سہولت فراہم کرتی ہے۔</p>
+                <ul>
+                    <li><strong>مخصوص پوشیدہ فولڈر:</strong> اگر آپ اپنی مرضی سے گوگل لاگ ان کرتے ہیں اور بیک اپ آن کرتے ہیں، تو آپ کا ڈیٹا گوگل ڈرائیو کے ایک پوشیدہ فولڈر (<code>drive.appdata</code>) میں محفوظ کیا جاتا ہے۔</li>
+                    <li><strong>دوسروں سے اوجھل:</strong> یہ فولڈر گوگل ڈرائیو کی عام فائلز میں نظر نہیں آتا اور نہ ہی کوئی دوسری ایپ اسے پڑھ سکتی ہے۔ اسے صرف آپ کی یہ ایپلی کیشن ہی استعمال کر سکتی ہے۔</li>
+                    <li><strong>ڈویلپر کی رسائی سے باہر:</strong> مائنڈ کرافٹس اے آئی کی آپ کے گوگل اکاؤنٹ یا بیک اپ تک کوئی رسائی نہیں ہے۔ یہ رابطے کا عمل مکمل طور پر آپ کے فون اور گوگل سرورز کے درمیان براہِ راست ہوتا ہے۔</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title" style="justify-content: flex-start; gap: 10px;">
+                    <span>۵۔ سیکیورٹی، بائیو میٹرک اور سسٹم لاک</span>
+                </h2>
+                <p>اپنے محفوظ کردہ کلپس کو محفوظ بنانے کے لیے آپ ایپ میں بائیو میٹرک لاک (فنگر پرنٹ یا چہرہ) یا موبائل کا سسٹم پن/پاس ورڈ فعال کر سکتے ہیں۔</p>
+                <ul>
+                    <li><strong>سسٹم کا سیکیورٹی انتظام:</strong> ClipVault اینڈرائیڈ کے آفیشل سیکیورٹی فریم ورک کو استعمال کرتی ہے۔ ایپ <strong>کبھی بھی</strong> آپ کے فنگر پرنٹس، چہرے کا ڈیٹا، یا موبائل پن کوڈ کو نہ تو دیکھ سکتی ہے اور نہ ہی اپنے پاس محفوظ کر سکتی ہے۔</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title" style="justify-content: flex-start; gap: 10px;">
+                    <span>۶۔ ڈیٹا کی صفائی اور کنٹرول</span>
+                </h2>
+                <p>آپ کو اپنے ڈیٹا پر مکمل اور مطلق اختیار حاصل ہے:</p>
+                <ul>
+                    <li><strong>لوکل صفائی:</strong> آپ ترتیبات میں جا کر ایک ایک کلپ، کیٹیگری، یا "پینک بٹن" (Panic Clean) دبا کر تمام حساس کلپس کو ایک کلک میں فوری حذف کر سکتے ہیں۔</li>
+                    <li><strong>گوگل ڈرائیو بیک اپ کا خاتمہ:</strong> آپ کسی بھی وقت گوگل اکاؤنٹ منقطع کر کے آٹو بیک اپ روک سکتے ہیں اور اپنے گوگل ڈرائیو سے بیک اپ فائلز کو مکمل طور پر مٹا سکتے ہیں۔</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title" style="justify-content: flex-start; gap: 10px;">
+                    <span>۷۔ براؤزر ایکسٹینشن (اردو کسٹمائزر اور سنک)</span>
+                </h2>
+                <p>ClipVault ڈیسک ٹاپ کے لیے ایک ساتھی براؤزر ایکسٹینشن فراہم کرتی ہے۔ آپ کی پرائیویسی کو مدنظر رکھتے ہوئے اس کے تمام بنیادی فیچرز مقامی طور پر کام کرتے ہیں:</p>
+                <ul>
+                    <li><strong>اردو فونٹس کی تبدیلی:</strong> یہ ایکسٹینشن ویب سائٹس کے فونٹس کو نستعلیق یا دیگر اردو فونٹس میں تبدیل کرتی ہے۔ یہ آپ کی براؤزنگ ہسٹری یا ویب سائٹ کا مواد کسی ریموٹ سرور کو نہیں بھیجتی۔</li>
+                    <li><strong>کلپ بورڈ کیپچر:</strong> آپ کے کمپیوٹر پر کاپی کی گئی عبارت صرف آپ کے براؤزر کی لوکل میموری میں محفوظ ہوتی ہے۔</li>
+                    <li><strong>کلاؤڈ سنک:</strong> اگر آپ گوگل کے ذریعے لاگ ان کرتے ہیں، تو ایکسٹینشن آپ کی لوکل کلپ بورڈ ہسٹری کو آپ کی موبائل ایپ کے ساتھ گوگل ڈرائیو کے مخصوص اور پوشیدہ AppData فولڈر کے ذریعے ہم آہنگ (Sync) کرتی ہے۔ یہ براہ راست آپ کے کمپیوٹر اور گوگل کے درمیان رابطہ ہے، اور ڈویلپرز کی اس تک کوئی رسائی نہیں ہے۔</li>
+                    <li><strong>اسکرین ریکارڈنگ:</strong> اسکرین شاٹ یا ویڈیو ریکارڈنگ مکمل طور پر آپ کے براؤزر کے اندر مقامی سطح پر ہوتی ہے۔ تمام فائلیں آپ کے کمپیوٹر پر براہ راست ڈاؤن لوڈ ہوتی ہیں اور کبھی بھی کسی کلاؤڈ سرور پر اپلوڈ نہیں کی جاتیں۔</li>
+                </ul>
+            </div>
+
+            <div class="card">
+                <h2 class="section-title" style="justify-content: flex-start; gap: 10px;">
+                    <span>۸۔ ہم سے رابطہ کریں</span>
+                </h2>
+                <p>اگر آپ کا اس پرائیویسی پالیسی کے متعلق کوئی سوال یا مشورہ ہے، تو آپ بلا جھجھک ہم سے رابطہ کر سکتے ہیں:</p>
+                <ul>
+                    <li>واٹس ایپ سپورٹ: <a href="https://wa.me/923023448246" target="_blank" style="color: var(--primary); text-decoration: none; font-family: 'Outfit';">+92 302 3448246</a></li>
+                    <li>آفیشل ویب سائٹ: <a href="https://mindcrafts.net" target="_blank" style="color: var(--primary); text-decoration: none; font-family: 'Outfit';">mindcrafts.net</a> یا <a href="https://codehubb.com" target="_blank" style="color: var(--primary); text-decoration: none; font-family: 'Outfit';">codehubb.com</a></li>
+                </ul>
+            </div>
+
+        </div>
+
+    </div>
+
+    <footer>
+        <p>&copy; 2026 ClipVault by <a href="https://mindcrafts.net" target="_blank">MindCrafts_AI</a>. All Rights Reserved.</p>
+    </footer>
+
+    <script>
+        // Language Toggle Logic
+        let currentLang = 'ur';
+        
+        function toggleLanguage() {
+            const enSection = document.getElementById('enSection');
+            const urSection = document.getElementById('urSection');
+            const langBtn = document.getElementById('langBtn');
+            const heroTitle = document.getElementById('heroTitle');
+            const heroSubtitle = document.getElementById('heroSubtitle');
+
+            if (currentLang === 'ur') {
+                // Switch to English
+                urSection.classList.remove('active');
+                enSection.classList.add('active');
+                langBtn.innerText = "اردو میں پڑھیں";
+                heroTitle.innerText = "Privacy Policy";
+                heroSubtitle.innerText = "Last updated: June 11, 2026. Your privacy and data security are our top priorities.";
+                currentLang = 'en';
+            } else {
+                // Switch to Urdu
+                enSection.classList.remove('active');
+                urSection.classList.add('active');
+                langBtn.innerText = "Read in English";
+                heroTitle.innerText = "پرائیویسی پالیسی";
+                heroSubtitle.innerText = "آخری ترمیم: 11 جون، 2026۔ آپ کی پرائیویسی اور ڈیٹا کی سیکیورٹی ہماری پہلی ترجیح ہے۔";
+                currentLang = 'ur';
+            }
+        }
+
+        // Theme Toggle Logic
+        let currentTheme = 'dark';
+        
+        function toggleTheme() {
+            const body = document.body;
+            const themeBtn = document.getElementById('themeBtn');
+            
+            if (currentTheme === 'dark') {
+                body.setAttribute('data-theme', 'light');
+                themeBtn.innerHTML = "☀️ Theme";
+                currentTheme = 'light';
+            } else {
+                body.removeAttribute('data-theme');
+                themeBtn.innerHTML = "🌙 Theme";
+                currentTheme = 'dark';
+            }
+        }
+
+        // Default setup
+        document.addEventListener('DOMContentLoaded', () => {
+            // Set initial state to Urdu
+            const enSection = document.getElementById('enSection');
+            const urSection = document.getElementById('urSection');
+            enSection.classList.remove('active');
+            urSection.classList.add('active');
+            document.getElementById('langBtn').innerText = "Read in English";
+            document.getElementById('heroTitle').innerText = "پرائیویسی پالیسی";
+            document.getElementById('heroSubtitle').innerText = "آخری ترمیم: 11 جون، 2026۔ آپ کی پرائیویسی اور ڈیٹا کی سیکیورٹی ہماری پہلی ترجیح ہے۔";
+        });
+    </script>
+</body>
+</html>
