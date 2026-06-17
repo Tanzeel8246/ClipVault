@@ -2,7 +2,7 @@
   "expo": {
     "name": "ClipVault",
     "slug": "clipvault",
-    "version": "1.1.6",
+    "version": "1.1.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "clipvault",
@@ -16,7 +16,7 @@
     },
     "android": {
       "package": "com.clipvault.mobile",
-      "versionCode": 9,
+      "versionCode": 10,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#080810"

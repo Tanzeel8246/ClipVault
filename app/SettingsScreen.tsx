@@ -282,6 +282,9 @@ export default function SettingsScreen() {
   const T = useAppTheme();
   const styles = React.useMemo(() => getStyles(T, lang, insets.top), [T, lang, insets.top]);
   const [hasBiometric, setHasBiometric] = useState(false);
+  const [localApiKey, setLocalApiKey] = useState(settings.geminiApiKey || '');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [isApiKeyModified, setIsApiKeyModified] = useState(false);
   const [monitorBusy, setMonitorBusy] = useState(false);
   const [driveBusy, setDriveBusy] = useState(false);
   const [driveAccount, setDriveAccount] = useState('');
@@ -289,6 +292,12 @@ export default function SettingsScreen() {
 
   const params = useLocalSearchParams();
   const apiKeyInputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    if (!isApiKeyModified) {
+      setLocalApiKey(settings.geminiApiKey || '');
+    }
+  }, [settings.geminiApiKey, isApiKeyModified]);
 
   useEffect(() => {
     const bootstrap = async () => {
@@ -613,26 +622,63 @@ export default function SettingsScreen() {
           </View>
         </View>
         <View style={{ padding: 14 }}>
-          <TextInput
-            ref={apiKeyInputRef}
+          <View style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: `${T.bg}88`,
+            borderColor: T.border,
+            borderWidth: 1,
+            borderRadius: 10,
+            paddingRight: 12,
+          }}>
+            <TextInput
+              ref={apiKeyInputRef}
+              style={{
+                flex: 1,
+                padding: 12,
+                color: T.text,
+                fontSize: 14,
+                fontFamily: nasta,
+              }}
+              placeholder={lang === 'en' ? 'Paste Gemini API Key...' : 'جیمینائی API کی پیسٹ کریں...'}
+              placeholderTextColor={T.muted}
+              value={localApiKey}
+              onChangeText={value => {
+                setLocalApiKey(value);
+                setIsApiKeyModified(true);
+              }}
+              secureTextEntry={!showApiKey}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            <TouchableOpacity onPress={() => setShowApiKey(!showApiKey)} style={{ padding: 4 }}>
+              <Text style={{ color: T.accent, fontSize: 13, fontFamily: nasta, fontWeight: '700' }}>
+                {showApiKey
+                  ? (lang === 'en' ? 'Hide' : 'چھپائیں')
+                  : (lang === 'en' ? 'Show' : 'دکھائیں')}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity
             style={{
-              backgroundColor: `${T.bg}88`,
-              borderColor: T.border,
-              borderWidth: 1,
+              marginTop: 10,
+              backgroundColor: T.accent,
               borderRadius: 10,
               padding: 12,
-              color: T.text,
-              fontSize: 14,
-              fontFamily: nasta,
+              alignItems: 'center',
+              justifyContent: 'center',
             }}
-            placeholder={lang === 'en' ? 'Paste Gemini API Key...' : 'جیمینائی API کی پیسٹ کریں...'}
-            placeholderTextColor={T.muted}
-            value={settings.geminiApiKey || ''}
-            onChangeText={value => void updateSetting('geminiApiKey', value)}
-            secureTextEntry
-            autoCapitalize="none"
-            autoCorrect={false}
-          />
+            onPress={async () => {
+              await updateSetting('geminiApiKey', localApiKey.trim());
+              setIsApiKeyModified(false);
+              showToast(lang === 'en' ? '✨ Gemini API Key saved!' : '✨ جیمینائی API کی محفوظ ہو گئی!');
+            }}
+          >
+            <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700', fontFamily: nasta }}>
+              {lang === 'en' ? 'Save API Key' : 'API کی محفوظ کریں'}
+            </Text>
+          </TouchableOpacity>
         </View>
       </SettingsSection>
 

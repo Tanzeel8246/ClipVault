@@ -2550,19 +2550,14 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       return
     }
 
-    releaseSpeechRecognizer()
     voicePartialText = ""
     voiceEndedWithSilence = false
     voiceShouldKeepListening = true
     voiceSilenceCount = 0
-    speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
-      setRecognitionListener(createRecognitionListener())
-    }
 
     isListening = true
     lastVoiceLevelStatusAt = 0L
     startVoicePulse()
-    startVoiceAutoStopTimer()  // 4s absolute auto-off
     refreshKeyboard()           // mic button background = indicator
     startVoiceSession("Listening...")
   }
@@ -2577,13 +2572,22 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
       putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
       putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
-      putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-      putExtra("android.speech.extra.PREFER_OFFLINE", true)
     }
   }
 
   private fun startVoiceSession(message: String) {
-    if (!voiceShouldKeepListening || speechRecognizer == null) return
+    if (!voiceShouldKeepListening) return
+    
+    releaseSpeechRecognizer()
+    try {
+      speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
+        setRecognitionListener(createRecognitionListener())
+      }
+    } catch (e: Exception) {
+      finishVoiceTyping("voice init failed")
+      return
+    }
+
     currentInputConnection?.finishComposingText()
     voicePartialText = ""
     voiceEndedWithSilence = false
@@ -2743,7 +2747,10 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
         normalizedText = " $normalizedText"
       }
     }
-    connection.setComposingText(normalizedText, 1)
+    if (voicePartialText.isNotEmpty()) {
+      connection.deleteSurroundingText(voicePartialText.length, 0)
+    }
+    connection.commitText(normalizedText, 1)
     voicePartialText = normalizedText
     connection.endBatchEdit()
   }
@@ -2763,6 +2770,9 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
           normalizedText = " $normalizedText"
         }
       }
+    }
+    if (voicePartialText.isNotEmpty()) {
+      connection.deleteSurroundingText(voicePartialText.length, 0)
     }
     val suffix = voiceFinalSuffixFor(normalizedText)
     connection.commitText("$normalizedText$suffix", 1)
