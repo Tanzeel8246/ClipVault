@@ -1470,7 +1470,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       var result: String? = null
       for (key in keys) {
         try {
-          val url = java.net.URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=$key")
+          val url = java.net.URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$key")
           val conn = url.openConnection() as java.net.HttpURLConnection
           conn.requestMethod = "POST"
           conn.setRequestProperty("Content-Type", "application/json")
