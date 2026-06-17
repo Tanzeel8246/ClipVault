@@ -551,8 +551,8 @@ export class LocalAIProcessor {
   // Gemini API Summarization
   static async summarizeWithGemini(text: string, apiKey: string, lang: 'ur' | 'en'): Promise<string> {
     const prompt = lang === 'ur'
-      ? `درج ذیل متن کا مختصر اور جامع خلاصہ اردو زبان میں لکھیں:\n\n${text}`
-      : `Briefly summarize the following text. Keep it concise:\n\n${text}`;
+      ? `درج ذیل متن کا انتہائی مختصر، جامع اور سادہ الفاظ میں نچوڑ/خلاصہ (صرف 2 سے 3 جملوں میں) اردو زبان میں لکھیں۔ یاد رہے کہ یہ تشریح یا تفصیل نہ ہو، بلکہ صرف مرکزی پیغام اور مفہوم واضح کرے تاکہ تفصیلات کے لیے اصل تحریر پڑھی جا سکے۔\n\nمتن:\n${text}`
+      : `Provide an extremely brief, concise summary (strictly 2 to 3 sentences) of the following text in English. It must NOT be an explanation or elaboration. Focus only on the core message and main takeaway, so that the reader has to read the text for details.\n\nText:\n${text}`;
       
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
     const response = await fetch(url, {

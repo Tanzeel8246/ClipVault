@@ -2550,6 +2550,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       return
     }
 
+    currentInputConnection?.finishComposingText()
     voicePartialText = ""
     voiceEndedWithSilence = false
     voiceShouldKeepListening = true
@@ -2588,7 +2589,6 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       return
     }
 
-    currentInputConnection?.finishComposingText()
     voicePartialText = ""
     voiceEndedWithSilence = false
     updateStatus(message)
@@ -2776,7 +2776,6 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     }
     val suffix = voiceFinalSuffixFor(normalizedText)
     connection.commitText("$normalizedText$suffix", 1)
-    connection.finishComposingText()
     voicePartialText = ""
     typedBuffer = ""
     connection.endBatchEdit()
@@ -2884,7 +2883,8 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
   private fun finishVoiceTyping(message: String) {
     voiceShouldKeepListening = false
-    currentInputConnection?.finishComposingText()
+    isListening = false
+    voiceEndedWithSilence = false
     stopVoicePulse()
     stopVoiceAutoStopTimer()
     stopVoiceLineBreakTimer()
@@ -2898,7 +2898,6 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     voiceLineBreakRunnable = Runnable {
       if (isListening && voiceShouldKeepListening) {
         val connection = currentInputConnection ?: return@Runnable
-        connection.finishComposingText()
         val beforeCursor = connection.getTextBeforeCursor(1, 0)
         if (beforeCursor != null && beforeCursor.toString() == " ") {
             connection.deleteSurroundingText(1, 0)
@@ -2916,11 +2915,10 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   }
 
   private fun releaseSpeechRecognizer() {
-    speechRecognizer?.destroy()
+    try {
+      speechRecognizer?.destroy()
+    } catch (e: Exception) {}
     speechRecognizer = null
-    isListening = false
-    voiceShouldKeepListening = false
-    voiceEndedWithSilence = false
   }
 
   private fun voiceErrorMessage(error: Int): String {
