@@ -1,6 +1,7 @@
 package com.clipvault.mobile
 
 import android.Manifest
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -31,6 +32,7 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.RelativeSizeSpan
 import android.widget.TextView
+import android.widget.EditText
 import java.util.concurrent.Executors
 import org.json.JSONArray
 import org.json.JSONObject
@@ -44,6 +46,11 @@ import android.view.textservice.SpellCheckerSession
 import android.view.textservice.SuggestionsInfo
 import android.view.textservice.TextInfo
 import android.view.textservice.TextServicesManager
+import androidx.core.content.FileProvider
+import androidx.core.view.inputmethod.InputConnectionCompat
+import androidx.core.view.inputmethod.InputContentInfoCompat
+import android.content.ClipDescription
+import java.io.File
 
 class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.SpellCheckerSessionListener {
   private enum class LayoutMode(val code: String, val spaceLabel: String, val voiceLocale: String) {
@@ -74,7 +81,13 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     THEMES,
     LANGUAGES,
     ALTERNATES,
+    GIFS,
+    STICKERS,
+    TEXT_EDIT,
+    SETTINGS
   }
+
+  private var isIncognitoMode = false
 
   private enum class ShiftState {
     OFF,
@@ -96,6 +109,89 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   )
 
   private data class EmojiCategory(val icon: String, val emojis: List<String>)
+
+  // ─── Gboard Parity State ───────────────────────────────────────
+  private var keyPreviewPopup: PopupWindow? = null
+  private var keyPreviewTextView: TextView? = null
+  private var spaceSwipeStartX = 0f
+  private var isSpaceSwiping = false
+
+  // ─── Gboard Parity Phase 2 State ───────────────────────────────────────
+  private var bigramDictionary = mutableMapOf<String, List<String>>()
+  private var isEmojiSearchMode = false
+  private var emojiSearchBuffer = ""
+  private var isEmojiKitchenMode = false
+  private var kitchenEmoji1: String? = null
+  private var kitchenEmoji2: String? = null
+  private var kitchenWorkbenchRef: LinearLayout? = null
+  private var kitchenE1Ref: TextView? = null
+  private var kitchenE2Ref: TextView? = null
+  private var kitchenSendBtnRef: Button? = null
+  private var kitchenHintRef: TextView? = null
+  private var kitchenResetBtnRef: TextView? = null
+
+  private fun updateKitchenUi() {
+    val wb = kitchenWorkbenchRef ?: return
+    if (!isEmojiKitchenMode) {
+      wb.visibility = View.GONE
+      return
+    }
+    wb.visibility = View.VISIBLE
+    kitchenE1Ref?.text = kitchenEmoji1 ?: "❓"
+    kitchenE2Ref?.text = kitchenEmoji2 ?: "❓"
+
+    if (kitchenEmoji1 != null && kitchenEmoji2 != null) {
+      val mashup = com.clipvault.mobile.keyboard.EmojiKitchenEngine.getMashup(kitchenEmoji1!!, kitchenEmoji2!!)
+      kitchenSendBtnRef?.text = "🚀 ${mashup.title}"
+      kitchenSendBtnRef?.visibility = View.VISIBLE
+      kitchenHintRef?.visibility = View.GONE
+    } else {
+      kitchenSendBtnRef?.visibility = View.GONE
+      kitchenHintRef?.visibility = View.VISIBLE
+      kitchenHintRef?.text = if (kitchenEmoji1 == null) "نیچے سے پہلا ایموجی منتخب کریں" else "دوسرا ایموجی منتخب کریں"
+    }
+
+    kitchenResetBtnRef?.visibility = if (kitchenEmoji1 != null || kitchenEmoji2 != null) View.VISIBLE else View.GONE
+  }
+  private var emojiTags = mapOf(
+      "smile" to listOf("😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇"),
+      "sad" to listOf("🥲", "🥹", "🥺", "😢", "😭", "😞", "😔", "😟", "😕", "🙁"),
+      "heart" to listOf("❤️", "🧡", "💛", "💚", "💙", "💜", "🤎", "🖤", "🤍", "💔", "❤️‍🔥", "💖", "💗"),
+      "fire" to listOf("🔥"),
+      "star" to listOf("⭐", "🌟", "✨", "💫", "🌠"),
+      "food" to listOf("🍕", "🍔", "🍟", "🌭", "🍿", "🍳"),
+      "animal" to listOf("🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼"),
+      "vehicle" to listOf("🚗", "🚕", "🚙", "🚌", "🚎", "🏎️", "🚓", "🚑", "🚒"),
+      "flag" to listOf("🇵🇰", "🇸🇦", "🇹🇷", "🇦🇪", "🇵🇸", "🇺🇸", "🇬🇧")
+  )
+  private var lastTapTime = 0L
+
+  // ── Gboard Parity: 10 fixes state variables ────────────────────────────
+  private var lastSpaceTapTime = 0L       // Fix 1: double-space → period
+  private var lastShiftTapTime = 0L       // Fix 2: double-tap → Caps Lock
+  private var recentEmojis = mutableListOf<String>()  // Fix 4: recently used
+  private var systemThemeAutoFollow = true // Fix 7: auto system theme
+  private var autoCorrectEnabled = true    // Fix 10: toggle autocorrect
+  private var doubleSpacePeriodEnabled = true // Fix 1 & 10: toggle double-space period
+
+  // ─── Gboard Parity Phase 3 State ───────────────────────────────────────
+  private var isGifSearchMode = false
+  private var gifSearchQuery = "trending"
+  private var cachedGifs = mutableListOf<String>()
+
+  // ─── Swipe/Glide Typing State ───────────────────────────────────
+  private data class SwipePoint(val x: Float, val y: Float, val timestamp: Long)
+  private var isSwipeActive = false
+  private var swipePath = mutableListOf<SwipePoint>()
+  private var swipeStartTime = 0L
+  private var swipeMinDistance = 0f
+  private var keyHitBoxes = mutableMapOf<String, android.graphics.RectF>()
+  private val keyButtons = mutableMapOf<String, View>()
+  private var swipeTrailView: SwipeTrailView? = null
+  private var lastSwipeKey = ""
+  private var swipeKeySequence = mutableListOf<String>()
+  private var lastSwipeAlternatives = listOf<String>()
+  private var swipeDictionary = listOf<String>()
 
   private var clipboardManager: ClipboardManager? = null
   private var speechRecognizer: SpeechRecognizer? = null
@@ -136,6 +232,11 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   private var keyboardHeightScale = 1.0f
   private var keyTextScale = 1.0f
   private var hapticsEnabled = true
+  private var vibrator: android.os.Vibrator? = null
+  private var suggestionRequestId = 0L
+  private var pendingSuggestionRunnable: Runnable? = null
+  private var currentQuickSuggestions = listOf<String>()
+  private var indexedSwipeDictionary = mapOf<Char, List<String>>()
   //  Background worker + caches (fixes hang on every keystroke) ──────────────
   private var cachedThemesJson: JSONObject? = null
   private val drawableCache = LruCache<String, Drawable>(100)
@@ -144,6 +245,12 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   private var cachedLearnedWords: List<String> = emptyList()
   private var lastLearnedWordsRefreshAt = 0L
   private var cachedRecentClips: List<String> = emptyList()
+  private var cachedFavoriteClips: List<String> = emptyList()
+  private var cachedPersonalDictionary: List<String> = emptyList()
+  // ─── Clips panel state ────────────────────────────────────────────────────────
+  private var clipSearchQuery: String = ""
+  private var selectedClipTab: String = "All"  // All, Fav, Pinned, URL, Phone, Email, Code
+  private var clipSearchEditText: android.widget.EditText? = null
   private var themePanelScrollY = 0
   private var themeScrollViewRef: ScrollView? = null
   // Voice auto-timeout
@@ -159,6 +266,8 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   private var emojiCategoryIndex = 0
   // Mic button reference for live pulse animation (without full keyboard rebuild)
   private var micButtonRef: Button? = null
+  private var voiceOverlayRef: View? = null
+  private var voiceOverlayTextRef: TextView? = null
 
   // Spell Checker
   private var spellCheckerSession: SpellCheckerSession? = null
@@ -186,9 +295,50 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
   override fun onCreate() {
     super.onCreate()
+    com.clipvault.mobile.keyboard.VersionControlManager.enforceMigrations(this)
     loadKeyboardPrefs()
+    loadRecentEmojis()
     clipboardManager = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     clipboardManager?.addPrimaryClipChangedListener(clipboardListener)
+    vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+
+    backgroundExecutor.execute {
+        val words = mutableListOf<String>()
+        val indexed = mutableMapOf<Char, MutableList<String>>()
+        fun addWord(raw: String) {
+          val w = raw.trim()
+          if (w.length in 2..24) {
+            words.add(w)
+            val ch = w[0].lowercaseChar()
+            indexed.getOrPut(ch) { mutableListOf() }.add(w)
+          }
+        }
+        try {
+            assets.open("dictionary_en.txt").bufferedReader().useLines { lines ->
+                lines.forEach { addWord(it) }
+            }
+        } catch (e: Exception) {}
+        try {
+            assets.open("dictionary_ur.txt").bufferedReader().useLines { lines ->
+                lines.forEach { addWord(it) }
+            }
+        } catch (e: Exception) {}
+        mainHandler.post {
+          swipeDictionary = words
+          indexedSwipeDictionary = indexed
+        }
+        
+        try {
+            assets.open("bigrams.txt").bufferedReader().useLines { lines ->
+                lines.forEach { line ->
+                    val parts = line.split(":")
+                    if (parts.size == 2) {
+                        bigramDictionary[parts[0].trim().lowercase()] = parts[1].split(",").map { it.trim() }
+                    }
+                }
+            }
+        } catch (e: Exception) {}
+    }
 
     try {
       val tsm = getSystemService(Context.TEXT_SERVICES_MANAGER_SERVICE) as TextServicesManager
@@ -208,12 +358,68 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     backgroundExecutor.shutdownNow()
     super.onDestroy()
   }
+  private fun showKeyPreview(view: View, key: String, label: String) {
+    if (keyPreviewPopup == null) {
+        keyPreviewTextView = TextView(this).apply {
+            gravity = Gravity.CENTER
+            textSize = 34f
+            setTextColor(themeColors().text)
+            typeface = Typeface.DEFAULT_BOLD
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(14).toFloat()
+                setColor(themeColors().key)
+                setStroke(dp(2), themeColors().accent)
+            }
+            elevation = dp(8).toFloat()
+        }
+        keyPreviewPopup = PopupWindow(this).apply {
+            contentView = keyPreviewTextView
+            width = dp(68)
+            height = dp(76)
+            isTouchable = false
+            isClippingEnabled = false
+            animationStyle = 0
+        }
+    }
+    
+    keyPreviewTextView?.text = label
+    keyPreviewTextView?.setTextColor(themeColors().text)
+    (keyPreviewTextView?.background as? GradientDrawable)?.apply {
+        setColor(themeColors().key)
+        setStroke(dp(2), themeColors().accent)
+    }
+    
+    val loc = IntArray(2)
+    view.getLocationOnScreen(loc)
+    
+    val x = loc[0] + (view.width / 2) - dp(34)
+    val y = loc[1] - dp(76) - dp(4)
+    
+    mainHandler.removeCallbacks(dismissPreviewRunnable)
+    if (keyPreviewPopup?.isShowing == true) {
+        keyPreviewPopup?.update(x, y, -1, -1)
+    } else {
+        keyPreviewPopup?.showAtLocation(view, Gravity.NO_GRAVITY, x, y)
+    }
+  }
+
+  private val dismissPreviewRunnable = Runnable {
+    try { keyPreviewPopup?.dismiss() } catch (e: Exception) {}
+  }
+
+  private fun dismissKeyPreview() {
+    mainHandler.removeCallbacks(dismissPreviewRunnable)
+    mainHandler.postDelayed(dismissPreviewRunnable, 45L)
+  }
 
   override fun onStartInputView(info: android.view.inputmethod.EditorInfo?, restarting: Boolean) {
     super.onStartInputView(info, restarting)
     selectionStart = -1
     selectionEnd = -1
     updateShiftState()
+    keyPreviewPopup?.dismiss()
+    keyPreviewPopup = null
 
     if (!restarting) {
       if (panelMode != PanelMode.KEYS || layoutMode == LayoutMode.SYMBOLS) {
@@ -224,13 +430,23 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     }
 
     try {
-      val themeFile = java.io.File(filesDir, "theme.txt")
-      if (themeFile.exists()) {
-        val savedTheme = themeFile.readText().trim()
-        val newTheme = KeyboardTheme.valueOf(savedTheme)
-        if (newTheme != themeMode) {
-          themeMode = newTheme
+      if (systemThemeAutoFollow) {
+        val nightModeFlags = resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        val isSystemDark = nightModeFlags == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        val targetTheme = if (isSystemDark) KeyboardTheme.CLASSIC_DARK else KeyboardTheme.SOFT_IVORY
+        if (targetTheme != themeMode) {
+          themeMode = targetTheme
           refreshKeyboard()
+        }
+      } else {
+        val themeFile = java.io.File(filesDir, "theme.txt")
+        if (themeFile.exists()) {
+          val savedTheme = themeFile.readText().trim()
+          val newTheme = KeyboardTheme.valueOf(savedTheme)
+          if (newTheme != themeMode) {
+            themeMode = newTheme
+            refreshKeyboard()
+          }
         }
       }
     } catch(e: Exception) {}
@@ -255,10 +471,10 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     val shouldShift = caps != 0
     if (shouldShift && shiftState != ShiftState.SHIFTED) {
       shiftState = ShiftState.SHIFTED
-      refreshKeyboard()
+      updateKeyLabelsForShift()
     } else if (!shouldShift && shiftState == ShiftState.SHIFTED && typedBuffer.isEmpty()) {
       shiftState = ShiftState.OFF
-      refreshKeyboard()
+      updateKeyLabelsForShift()
     }
   }
 
@@ -266,28 +482,75 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     stopRepeatingDelete()
     cancelPendingLongPress()
     dismissAlternatePopup()
+    kitchenWorkbenchRef = null
+    kitchenE1Ref = null
+    kitchenE2Ref = null
+    kitchenSendBtnRef = null
+    kitchenHintRef = null
+    kitchenResetBtnRef = null
     super.onFinishInputView(finishingInput)
   }
 
+  private inner class SwipeTrailView(context: Context) : View(context) {
+    private val trailPaint = android.graphics.Paint().apply {
+        color = themeColors().accent
+        strokeWidth = dp(3).toFloat()
+        style = android.graphics.Paint.Style.STROKE
+        isAntiAlias = true
+        alpha = 180
+        strokeCap = android.graphics.Paint.Cap.ROUND
+        strokeJoin = android.graphics.Paint.Join.ROUND
+    }
+    private val trailPath = android.graphics.Path()
+
+    fun updateTrail(points: List<SwipePoint>) {
+        trailPath.reset()
+        if (points.size < 2) { invalidate(); return }
+        
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        val offX = loc[0].toFloat()
+        val offY = loc[1].toFloat()
+        
+        trailPath.moveTo(points[0].x - offX, points[0].y - offY)
+        for (i in 1 until points.size) {
+            trailPath.lineTo(points[i].x - offX, points[i].y - offY)
+        }
+        invalidate()
+    }
+
+    fun clearTrail() { trailPath.reset(); invalidate() }
+
+    override fun onDraw(canvas: android.graphics.Canvas) {
+        super.onDraw(canvas)
+        canvas.drawPath(trailPath, trailPaint)
+    }
+  }
+
   override fun onCreateInputView(): View {
+    keyHitBoxes.clear()
+    keyButtons.clear()
     val colors = themeColors()
-    val textRowH = dp((48 * keyboardHeightScale).toInt().coerceIn(42, 56))
+    val textRowH = dp((48 * keyboardHeightScale).toInt().coerceIn(38, 60))
+    swipeMinDistance = dp(40).toFloat()
     
-    val showToolbarAndBottom = !isDialpadMode || panelMode != PanelMode.KEYS || layoutMode != LayoutMode.SYMBOLS
-    val toolbarH = if (showToolbarAndBottom) dp(36) else 0
-    val bottomRowH = if (showToolbarAndBottom) (textRowH + dp(2)) else 0
-    val actualPanelH = if (!showToolbarAndBottom) {
+    val isSymbolsDialpad = isDialpadMode && panelMode == PanelMode.KEYS && layoutMode == LayoutMode.SYMBOLS
+    val showSuggestionsAndToolbar = panelMode != PanelMode.EMOJI && !isSymbolsDialpad
+    val showBottomRow = !isSymbolsDialpad
+    val actualPanelH = if (panelMode == PanelMode.EMOJI) {
+      ((textRowH + dp(2)) * 4) + dp(36) + dp(32)
+    } else if (isSymbolsDialpad) {
       ((textRowH + dp(2)) * 5) + dp(36) + dp(33)
     } else {
       (textRowH + dp(2)) * 4
     }
 
-    return LinearLayout(this).apply {
+    val mainContainer = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       setPadding(dp(5), dp(4), dp(5), dp(6))
       setBackgroundColor(colors.background)
 
-      if (showToolbarAndBottom) {
+      if (showSuggestionsAndToolbar) {
         addSuggestionStrip(this, colors)  // row 1: suggestions at top
         addToolbarRow(this, colors)       // row 2: toolbar
       }
@@ -298,7 +561,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
         when (panelMode) {
           PanelMode.KEYS -> {
             if (this@ClipVaultKeyboardService.layoutMode == LayoutMode.SYMBOLS) {
-              val rowH = if (!showToolbarAndBottom) (actualPanelH / 5) else textRowH
+              val rowH = if (isSymbolsDialpad) (actualPanelH / 5) else textRowH
               addSymbolsPanel(this, colors, rowH)
             } else {
               rowsForLayout().forEach { row -> addKeyRow(this, row, colors, textRowH, weight = 1f) }
@@ -310,13 +573,104 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
           PanelMode.THEMES -> addThemePanel(this, colors)
           PanelMode.LANGUAGES -> addLanguagePanel(this, colors)
           PanelMode.ALTERNATES -> addAlternatesPanel(this, colors)
+          PanelMode.TEXT_EDIT -> addTextEditPanel(this, colors)
+          PanelMode.SETTINGS -> addSettingsPanel(this, colors)
+          else -> {}
         }
       }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, actualPanelH, 1f))
 
-      if (showToolbarAndBottom) {
+      if (showBottomRow) {
         addBottomRow(this, colors, textRowH)
       }
     }
+
+    val rootLayout = android.widget.RelativeLayout(this)
+    mainContainer.id = android.view.View.generateViewId()
+    rootLayout.addView(mainContainer, android.widget.RelativeLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    
+    swipeTrailView = SwipeTrailView(this).apply {
+        isClickable = false
+        isFocusable = false
+    }
+    rootLayout.addView(swipeTrailView, android.widget.RelativeLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
+        addRule(android.widget.RelativeLayout.ALIGN_TOP, mainContainer.id)
+        addRule(android.widget.RelativeLayout.ALIGN_BOTTOM, mainContainer.id)
+    })
+
+    // --- Voice Overlay ---
+    val voiceOverlay = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
+        setBackgroundColor(colors.background)
+        visibility = if (isListening) View.VISIBLE else View.GONE
+        isClickable = true // Absorb touches
+        
+        // Voice language indicator pill
+        val activeLocaleLabel = when (this@ClipVaultKeyboardService.layoutMode) {
+          LayoutMode.UR -> "اردو (پاکستان)"
+          LayoutMode.AR -> "العربية"
+          else -> "English (US)"
+        }
+        addView(TextView(this@ClipVaultKeyboardService).apply {
+            text = "🎙️ $activeLocaleLabel"
+            textSize = 12f
+            setTextColor(colors.accent)
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(12).toFloat()
+                setColor(Color.argb(35, Color.red(colors.accent), Color.green(colors.accent), Color.blue(colors.accent)))
+            }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            setMargins(0, 0, 0, dp(10))
+        })
+
+        voiceOverlayTextRef = TextView(this@ClipVaultKeyboardService).apply {
+            text = if (this@ClipVaultKeyboardService.layoutMode == LayoutMode.UR) "سنا جا رہا ہے..." else "Listening..."
+            textSize = 22f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(colors.text)
+            setPadding(0, 0, 0, dp(16))
+        }
+        addView(voiceOverlayTextRef)
+        
+        val micOverlayBtn = android.widget.ImageView(this@ClipVaultKeyboardService).apply {
+            setImageResource(android.R.drawable.ic_btn_speak_now)
+            setColorFilter(colors.accent, android.graphics.PorterDuff.Mode.SRC_IN)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.argb(45, Color.red(colors.accent), Color.green(colors.accent), Color.blue(colors.accent)))
+                setStroke(dp(2), colors.accent)
+            }
+            setPadding(dp(20), dp(20), dp(20), dp(20))
+            setOnClickListener {
+                toggleVoiceTyping()
+            }
+        }
+        addView(micOverlayBtn, LinearLayout.LayoutParams(dp(72), dp(72)))
+        
+        addView(TextView(this@ClipVaultKeyboardService).apply {
+            text = if (this@ClipVaultKeyboardService.layoutMode == LayoutMode.UR) "روکنے کے لیے دوبارہ ٹیپ کریں" else "Tap mic to stop listening"
+            textSize = 12f
+            setTextColor(colors.muted)
+            setPadding(0, dp(12), 0, 0)
+        })
+    }
+    voiceOverlayRef = voiceOverlay
+    
+    rootLayout.addView(voiceOverlay, android.widget.RelativeLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT).apply {
+        addRule(android.widget.RelativeLayout.ALIGN_TOP, mainContainer.id)
+        addRule(android.widget.RelativeLayout.ALIGN_BOTTOM, mainContainer.id)
+    })
+
+    mainContainer.post {
+      ensureKeyHitBoxes()
+    }
+
+    return rootLayout
   }
 
   private fun rowsForLayout(): List<List<String>> {
@@ -346,40 +700,48 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   // Symbol characters organised into pages: 4 rows x 10 columns per page
   private fun symbolPages(): List<List<List<String>>> {
     val p1 = listOf(
-      listOf("1","2","3","4","5","6","7","8","9","0"),
-      listOf("@","#","$","%","&","-","+","(",")","/"),
-      listOf("*","\"","'",":",";","!","?","\\","_","back"),
-      listOf("sym_cycle", "~","`","|","\u2022","\u221A","\u03C0","\u00F7","\u00D7","\u2206")
+      listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"),
+      listOf("@", "#", "$", "%", "&", "-", "+", "(", ")", "/"),
+      listOf("*", "\"", "'", ":", ";", "!", "?", "\\", "_", "back"),
+      listOf("sym_cycle", "~", "`", "|", "\u2022", "\u221A", "\u03C0", "\u00F7", "\u00D7", "sym_cycle")
     )
     val p2 = listOf(
-      listOf("¹","²","³","⁴","⁵","⁶","⁷","⁸","⁹","⁰"),
-      listOf("\u00A3","\u00A2","\u20AC","\u00A5","^","\u00B0","=","{","}","\\"),
-      listOf("%","\u00A9","\u00AE","\u2122","\u2713","[","]","<",">","back"),
-      listOf("sym_cycle", "\u00A7","\u221E","\u2260","\u2248","\u2264","\u2265","\u00B1","\u2039","\u203A")
+      listOf("~", "\\", "|", "^", "\u00B0", "=", "{", "}", "[", "]"),
+      listOf("\u00A3", "\u20AC", "\u00A5", "\u00A2", "\u20B9", "\u20A8", "\u00A9", "\u00AE", "\u2122", "\u2713"),
+      listOf("\u00A7", "\u221E", "\u2260", "\u2248", "\u2264", "\u2265", "\u00B1", "\u2039", "\u203A", "back"),
+      listOf("sym_cycle", "<", ">", "\u00AB", "\u00BB", "\u00B6", "\u2206", "\u221A", "\u03C0", "sym_cycle")
     )
     return listOf(p1, p2)
   }
 
-  // Toolbar row: always same 6 buttons regardless of layout mode
-  // sym_cycle is now in bottom row for SYMBOLS mode
+  // Toolbar row: switch_system is first and prominently visible
   private fun addToolbarRow(parent: LinearLayout, colors: ThemeColors) {
-    val keys = listOf("theme", "mic", "clips", "ai_rewrite", "languages", "next_keyboard")
+    val keys = listOf("switch_system", "clips", "mic", "theme", "text_edit", "settings", "incognito", "ai_rewrite", "languages")
 
-    // Build toolbar manually so we can save micButtonRef for live pulse animation
-    parent.addView(LinearLayout(this).apply {
-      orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.CENTER
-      setPadding(0, dp(2), 0, dp(2))
-      keys.forEach { key ->
-        val btn = createKeyButton(labelFor(key), key, colors, isControlKey(key)).apply {
-          bindKeyTouch(this, key)
-          if (key == "mic") micButtonRef = this  // live pulse reference
+    // Wrap in HorizontalScrollView so it doesn't squish too many buttons
+    val hsv = HorizontalScrollView(this).apply {
+      isHorizontalScrollBarEnabled = false
+      overScrollMode = View.OVER_SCROLL_NEVER
+      
+      val container = LinearLayout(this@ClipVaultKeyboardService).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+        setPadding(dp(4), dp(2), dp(4), dp(2))
+        
+        keys.forEach { key ->
+          val btn = createKeyButton(labelFor(key), key, colors, isControlKey(key)).apply {
+            bindKeyTouch(this, key)
+            if (key == "mic") micButtonRef = this  // live pulse reference
+          }
+          addView(btn, LinearLayout.LayoutParams(dp(45), dp(32)).apply {
+            setMargins(dp(2), 0, dp(2), 0)
+          })
         }
-        addView(btn, LinearLayout.LayoutParams(0, dp(32), keyWeight(key)).apply {
-          setMargins(dp(2), 0, dp(2), 0)
-        })
       }
-    })
+      addView(container)
+    }
+    
+    parent.addView(hsv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
   }
 
   // Minimal status row (14dp) — hidden entirely when mic is active (mic button IS the indicator)
@@ -392,26 +754,61 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
     parent.addView(LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.CENTER
-      setPadding(0, 0, 0, dp(3))
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(dp(4), dp(2), dp(4), dp(3))
+      background = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        setColor(Color.argb(15, 255, 255, 255))
+        setStroke(dp(1), Color.argb(40, Color.red(colors.stroke), Color.green(colors.stroke), Color.blue(colors.stroke)))
+      }
 
-      repeat(3) {
+      repeat(3) { index ->
+        if (index > 0) {
+          addView(View(this@ClipVaultKeyboardService).apply {
+            setBackgroundColor(Color.argb(40, Color.red(colors.muted), Color.green(colors.muted), Color.blue(colors.muted)))
+          }, LinearLayout.LayoutParams(dp(1), dp(18)))
+        }
+
         addView(createKeyButton(" ", "", colors, true).apply {
-          textSize = 16f
+          textSize = if (index == 1) 16.5f else 15f
+          if (index == 1) typeface = Typeface.DEFAULT_BOLD
           setOnClickListener {
             val suggestion = tag as? String ?: ""
             if (suggestion == "CANCEL_SEARCH") {
               isSearchingClips = false
               typedBuffer = ""
               updateSuggestionStrip()
+            } else if (suggestion.startsWith("PASTE_CLIP:")) {
+              val clipText = suggestion.removePrefix("PASTE_CLIP:")
+              currentInputConnection?.commitText(clipText, 1)
+              updateStatus("📋 Pasted clip")
+              updateSuggestionStrip()
+            } else if (suggestion.startsWith("SMART_REPLY:")) {
+              val replyText = suggestion.removePrefix("SMART_REPLY:")
+              currentInputConnection?.commitText("$replyText ", 1)
+              updateStatus("💬 Smart Reply sent")
+              updateSuggestionStrip()
             } else if (suggestion.isNotBlank()) {
               if (isSearchingClips) isSearchingClips = false
               insertSuggestion(suggestion)
             }
           }
+          // Fix 9: Long-press suggestion to add to dictionary
+          setOnLongClickListener {
+            val suggestion = tag as? String ?: ""
+            if (suggestion.isNotBlank() && suggestion != "CANCEL_SEARCH" && !suggestion.startsWith("PASTE_CLIP:")) {
+              triggerVibration()
+              NativeClipStore.addLearnedWord(this@ClipVaultKeyboardService, suggestion)
+              cachedLearnedWords = (cachedLearnedWords + suggestion).distinct()
+              updateStatus("✓ Saved: $suggestion")
+              true
+            } else {
+              false
+            }
+          }
           suggestionButtons.add(this)
-        }, LinearLayout.LayoutParams(0, dp(30), 1f).apply {
-          setMargins(dp(3), 0, dp(3), 0)
+        }, LinearLayout.LayoutParams(0, dp(32), 1f).apply {
+          setMargins(dp(2), 0, dp(2), 0)
         })
       }
     })
@@ -426,70 +823,644 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       return
     }
     val keys = when (layoutMode) {
-      LayoutMode.EN -> listOf("symbols", "lang", ",", "space", ".", "!", "enter")
-      LayoutMode.UR, LayoutMode.AR -> listOf("symbols", "lang", "urdu_comma", "space", "urdu_period", "urdu_qmark", "enter")
+      LayoutMode.EN -> listOf("symbols", "lang", ",", "space", ".", "enter")
+      LayoutMode.UR, LayoutMode.AR -> listOf("symbols", "lang", "urdu_comma", "space", "urdu_period", "enter")
       LayoutMode.SYMBOLS -> {
         if (isDialpadMode) {
-          listOf("abc", "dialpad_toggle", "0", "enter")
+          listOf("abc", "dialpad_toggle", "space", "back", "enter")
         } else {
-          listOf("abc", "dialpad_toggle", "lang", ",", "space", ".", "enter")
+          listOf("abc", "dialpad_toggle", ",", "space", ".", "enter")
         }
       }
     }
     addKeyRow(parent, keys, colors, height)
   }
 
-  // Emoji panel: vertical scroll through ALL categories (no horizontal tab strip)
+  // Emoji panel: Gboard style with continuous vertical scrolling across all categories,
+  // real-time scroll synchronization with top category bar, and comprehensive search.
   private fun addEmojiPanel(parent: LinearLayout, colors: ThemeColors) {
-    val cats = emojiCategories()
+    val searchContainer = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(dp(4), dp(2), dp(4), dp(2))
+    }
 
-    val content = LinearLayout(this).apply {
-      orientation = LinearLayout.VERTICAL
-      setPadding(dp(2), 0, dp(2), dp(4))
+    val searchBox = EditText(this).apply {
+      hint = if (this@ClipVaultKeyboardService.layoutMode == LayoutMode.UR) "🔍 1,800+ ایموجیز تلاش کریں..." else "🔍 Search 1,800+ Emojis..."
+      setHintTextColor(colors.muted)
+      setTextColor(colors.text)
+      textSize = 13.5f
+      background = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(8).toFloat()
+        setColor(colors.surface)
+        setStroke(dp(1), colors.stroke)
+      }
+      setPadding(dp(10), dp(6), dp(10), dp(6))
+      setSingleLine(true)
+      isFocusable = true
+      isFocusableInTouchMode = true
+      setText(emojiSearchBuffer)
+      setSelection(emojiSearchBuffer.length)
+      addTextChangedListener(object : android.text.TextWatcher {
+        override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+        override fun onTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+        override fun afterTextChanged(s: android.text.Editable?) {
+          val query = s?.toString() ?: ""
+          if (query != emojiSearchBuffer) {
+            emojiSearchBuffer = query
+            isEmojiSearchMode = query.isNotBlank()
+            refreshKeyboard()
+          }
+        }
+      })
+    }
+    searchContainer.addView(searchBox, LinearLayout.LayoutParams(0, dp(36), 1f))
 
-      cats.forEach { cat ->
-        // Category header row (icon only, compact)
-        addView(LinearLayout(this@ClipVaultKeyboardService).apply {
-          orientation = LinearLayout.HORIZONTAL
-          gravity = Gravity.CENTER_VERTICAL
-          setPadding(dp(6), dp(6), dp(6), dp(4))
+    if (emojiSearchBuffer.isNotEmpty()) {
+      val clearBtn = TextView(this).apply {
+        text = "✕"
+        textSize = 14f
+        gravity = Gravity.CENTER
+        setTextColor(colors.muted)
+        setPadding(dp(8), 0, dp(8), 0)
+        setOnClickListener {
+          triggerVibration()
+          emojiSearchBuffer = ""
+          isEmojiSearchMode = false
+          refreshKeyboard()
+        }
+      }
+      searchContainer.addView(clearBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)))
+    }
 
+    val kitchenToggleBtn = Button(this).apply {
+      text = if (isEmojiKitchenMode) "🍳 Kitchen ON" else "🍳 Kitchen"
+      textSize = 12f
+      typeface = Typeface.DEFAULT_BOLD
+      setTextColor(if (isEmojiKitchenMode) Color.WHITE else colors.accent)
+      background = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(8).toFloat()
+        setColor(if (isEmojiKitchenMode) colors.accent else Color.argb(35, Color.red(colors.accent), Color.green(colors.accent), Color.blue(colors.accent)))
+        setStroke(dp(1), colors.accent)
+      }
+      setPadding(dp(8), dp(4), dp(8), dp(4))
+      setOnClickListener {
+        triggerVibration()
+        isEmojiKitchenMode = !isEmojiKitchenMode
+        if (!isEmojiKitchenMode) {
+          kitchenEmoji1 = null
+          kitchenEmoji2 = null
+        }
+        text = if (isEmojiKitchenMode) "🍳 Kitchen ON" else "🍳 Kitchen"
+        setTextColor(if (isEmojiKitchenMode) Color.WHITE else colors.accent)
+        background = GradientDrawable().apply {
+          shape = GradientDrawable.RECTANGLE
+          cornerRadius = dp(8).toFloat()
+          setColor(if (isEmojiKitchenMode) colors.accent else Color.argb(35, Color.red(colors.accent), Color.green(colors.accent), Color.blue(colors.accent)))
+          setStroke(dp(1), colors.accent)
+        }
+        updateKitchenUi()
+      }
+    }
+    searchContainer.addView(kitchenToggleBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)).apply {
+      setMargins(dp(4), 0, 0, 0)
+    })
+
+    parent.addView(searchContainer, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+    val kitchenWorkbench = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(dp(8), dp(4), dp(8), dp(4))
+      visibility = if (isEmojiKitchenMode) View.VISIBLE else View.GONE
+      background = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(8).toFloat()
+        setColor(Color.argb(40, Color.red(colors.accent), Color.green(colors.accent), Color.blue(colors.accent)))
+        setStroke(dp(1), colors.accent)
+      }
+    }
+    kitchenWorkbenchRef = kitchenWorkbench
+
+    val e1Text = TextView(this).apply {
+      text = kitchenEmoji1 ?: "❓"
+      textSize = 22f
+      gravity = Gravity.CENTER
+      setPadding(dp(6), dp(2), dp(6), dp(2))
+    }
+    kitchenE1Ref = e1Text
+    kitchenWorkbench.addView(e1Text)
+
+    kitchenWorkbench.addView(TextView(this).apply {
+      text = "➕"
+      textSize = 14f
+      gravity = Gravity.CENTER
+      setTextColor(colors.muted)
+      setPadding(dp(2), 0, dp(2), 0)
+    })
+
+    val e2Text = TextView(this).apply {
+      text = kitchenEmoji2 ?: "❓"
+      textSize = 22f
+      gravity = Gravity.CENTER
+      setPadding(dp(6), dp(2), dp(6), dp(2))
+    }
+    kitchenE2Ref = e2Text
+    kitchenWorkbench.addView(e2Text)
+
+    kitchenWorkbench.addView(TextView(this).apply {
+      text = "➔"
+      textSize = 14f
+      gravity = Gravity.CENTER
+      setTextColor(colors.accent)
+      setPadding(dp(2), 0, dp(2), 0)
+    })
+
+    val hintView = TextView(this).apply {
+      text = if (kitchenEmoji1 == null) "نیچے سے پہلا ایموجی منتخب کریں" else "دوسرا ایموجی منتخب کریں"
+      textSize = 12f
+      setTextColor(colors.muted)
+      gravity = Gravity.CENTER_VERTICAL
+      visibility = if (kitchenEmoji1 != null && kitchenEmoji2 != null) View.GONE else View.VISIBLE
+    }
+    kitchenHintRef = hintView
+    kitchenWorkbench.addView(hintView, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+      setMargins(dp(6), 0, dp(6), 0)
+    })
+
+    val sendBtn = Button(this).apply {
+      text = if (kitchenEmoji1 != null && kitchenEmoji2 != null) {
+        "🚀 " + com.clipvault.mobile.keyboard.EmojiKitchenEngine.getMashup(kitchenEmoji1!!, kitchenEmoji2!!).title
+      } else "🚀 Send"
+      textSize = 12f
+      typeface = Typeface.DEFAULT_BOLD
+      setTextColor(Color.WHITE)
+      background = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(6).toFloat()
+        setColor(colors.accent)
+      }
+      setPadding(dp(8), dp(4), dp(8), dp(4))
+      visibility = if (kitchenEmoji1 != null && kitchenEmoji2 != null) View.VISIBLE else View.GONE
+      setOnClickListener {
+        triggerVibration()
+        if (kitchenEmoji1 != null && kitchenEmoji2 != null) {
+          sendEmojiKitchenSticker(kitchenEmoji1!!, kitchenEmoji2!!)
+        }
+      }
+    }
+    kitchenSendBtnRef = sendBtn
+    kitchenWorkbench.addView(sendBtn, LinearLayout.LayoutParams(0, dp(34), 1f).apply {
+      setMargins(dp(4), 0, dp(4), 0)
+    })
+
+    val resetBtn = TextView(this).apply {
+      text = "✕"
+      textSize = 14f
+      gravity = Gravity.CENTER
+      setTextColor(colors.muted)
+      setPadding(dp(8), dp(4), dp(8), dp(4))
+      visibility = if (kitchenEmoji1 != null || kitchenEmoji2 != null) View.VISIBLE else View.GONE
+      setOnClickListener {
+        triggerVibration()
+        kitchenEmoji1 = null
+        kitchenEmoji2 = null
+        updateKitchenUi()
+      }
+    }
+    kitchenResetBtnRef = resetBtn
+    kitchenWorkbench.addView(resetBtn)
+
+    parent.addView(kitchenWorkbench, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+      setMargins(dp(4), dp(2), dp(4), dp(4))
+    })
+
+    // Search results view
+    if (isEmojiSearchMode && emojiSearchBuffer.isNotEmpty()) {
+      val foundEmojis = com.clipvault.mobile.keyboard.EmojiCatalog.search(emojiSearchBuffer)
+      val content = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(2), 0, dp(2), dp(4))
+        if (foundEmojis.isEmpty()) {
           addView(TextView(this@ClipVaultKeyboardService).apply {
-            text = cat.icon
-            textSize = 18f
-            setTextColor(colors.accent)
+            text = "No emojis found for '$emojiSearchBuffer'"
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            setTextColor(colors.muted)
           })
-        }, LinearLayout.LayoutParams(
-          ViewGroup.LayoutParams.MATCH_PARENT,
-          ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
+        } else {
+          foundEmojis.take(120).chunked(8).forEach { row -> addEmojiRow(this, row, colors, dp(40)) }
+        }
+      }
+      parent.addView(ScrollView(this).apply {
+        isVerticalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        addView(content)
+      }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+      return
+    }
 
-        // Emoji grid for this category: chunked into 9 columns for spaced borderless layout
-        cat.emojis.chunked(9).forEach { row -> addEmojiRow(this, row, colors, dp(38)) }
+    val cats = com.clipvault.mobile.keyboard.EmojiCatalog.allCategories(recentEmojis)
+    val categoryHeaders = mutableListOf<View>()
+    val categoryTabButtons = mutableListOf<Button>()
+
+    var activeCatIndex = emojiCategoryIndex.coerceIn(0, cats.size - 1)
+
+    val categoryBar = HorizontalScrollView(this).apply {
+      isHorizontalScrollBarEnabled = false
+      overScrollMode = View.OVER_SCROLL_NEVER
+    }
+
+    val emojiScrollView = ScrollView(this).apply {
+      isVerticalScrollBarEnabled = false
+      overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+    }
+
+    // 1. Top Category Horizontal Bar
+    val tabsLayout = LinearLayout(this).apply {
+      orientation = LinearLayout.HORIZONTAL
+      gravity = Gravity.CENTER_VERTICAL
+      setPadding(dp(4), dp(2), dp(4), dp(2))
+    }
+
+    // 2. Continuous Vertical Scrolling Grid with Instant Progressive Category Loading
+    val allContent = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(dp(2), 0, dp(2), dp(10))
+    }
+
+    var loadedCategoryCount = 0
+
+    fun appendCategoryAt(idx: Int) {
+      if (idx < 0 || idx >= cats.size) return
+      val cat = cats[idx]
+      val headerView = LinearLayout(this@ClipVaultKeyboardService).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(8), dp(8), dp(8), dp(4))
+
+        addView(TextView(this@ClipVaultKeyboardService).apply {
+          text = "${cat.icon}  ${cat.title}"
+          textSize = 13f
+          typeface = Typeface.DEFAULT_BOLD
+          setTextColor(colors.accent)
+        })
+      }
+      categoryHeaders.add(headerView)
+      allContent.addView(headerView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+      cat.emojis.chunked(8).forEach { row ->
+        addEmojiRow(allContent, row, colors, dp(40))
       }
     }
 
-    parent.addView(ScrollView(this).apply {
-      isVerticalScrollBarEnabled = false
-      overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-      addView(content)
-    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    // Render the initial category immediately for sub-millisecond response (< 5ms)
+    appendCategoryAt(0)
+    loadedCategoryCount = 1
+
+    cats.forEachIndexed { idx, cat ->
+      val isSelected = idx == activeCatIndex
+      val btn = Button(this@ClipVaultKeyboardService).apply {
+        text = cat.icon
+        textSize = 14f
+        setPadding(dp(4), dp(1), dp(4), dp(1))
+        setBackgroundColor(if (isSelected) Color.argb(60, 255, 255, 255) else Color.TRANSPARENT)
+        setOnClickListener {
+          triggerVibration()
+          activeCatIndex = idx
+          emojiCategoryIndex = idx
+          categoryTabButtons.forEachIndexed { bIdx, b ->
+            b.setBackgroundColor(if (bIdx == idx) Color.argb(60, 255, 255, 255) else Color.TRANSPARENT)
+          }
+          while (loadedCategoryCount <= idx && loadedCategoryCount < cats.size) {
+            appendCategoryAt(loadedCategoryCount)
+            loadedCategoryCount++
+          }
+          if (idx < categoryHeaders.size) {
+            val targetY = categoryHeaders[idx].top
+            emojiScrollView.smoothScrollTo(0, targetY)
+          }
+        }
+      }
+      categoryTabButtons.add(btn)
+      tabsLayout.addView(btn, LinearLayout.LayoutParams(dp(34), dp(32)).apply {
+        setMargins(dp(2), 0, dp(2), 0)
+      })
+    }
+    categoryBar.addView(tabsLayout)
+    parent.addView(categoryBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)))
+
+    emojiScrollView.addView(allContent)
+
+    // Incrementally load the remaining categories on next animation frame
+    fun scheduleRemainingCategories() {
+      if (loadedCategoryCount < cats.size && panelMode == PanelMode.EMOJI) {
+        mainHandler.post {
+          if (loadedCategoryCount < cats.size && panelMode == PanelMode.EMOJI) {
+            appendCategoryAt(loadedCategoryCount)
+            loadedCategoryCount++
+            scheduleRemainingCategories()
+          }
+        }
+      }
+    }
+    scheduleRemainingCategories()
+
+    // Real-time bidirectional scroll tracking
+    emojiScrollView.viewTreeObserver.addOnScrollChangedListener {
+      val scrollY = emojiScrollView.scrollY
+      if (loadedCategoryCount < cats.size) {
+        val contentH = allContent.height
+        if (contentH > 0 && scrollY + emojiScrollView.height >= contentH - dp(350)) {
+          appendCategoryAt(loadedCategoryCount)
+          loadedCategoryCount++
+        }
+      }
+      var newActiveIdx = 0
+      for (i in categoryHeaders.indices) {
+        if (categoryHeaders[i].top <= scrollY + dp(30)) {
+          newActiveIdx = i
+        }
+      }
+      if (newActiveIdx != activeCatIndex && newActiveIdx in categoryTabButtons.indices) {
+        activeCatIndex = newActiveIdx
+        emojiCategoryIndex = newActiveIdx
+        categoryTabButtons.forEachIndexed { bIdx, b ->
+          b.setBackgroundColor(if (bIdx == newActiveIdx) Color.argb(60, 255, 255, 255) else Color.TRANSPARENT)
+        }
+        val targetButton = categoryTabButtons[newActiveIdx]
+        categoryBar.smoothScrollTo(targetButton.left - dp(40), 0)
+      }
+    }
+
+    parent.addView(emojiScrollView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
   }
 
   private fun addEmojiRow(parent: LinearLayout, emojis: List<String>, colors: ThemeColors, height: Int) {
     parent.addView(LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
       gravity = Gravity.CENTER
-      setPadding(0, dp(4), 0, dp(4)) // Spacing for layout
+      setPadding(0, dp(4), 0, dp(4))
 
       emojis.forEach { emoji ->
-        addView(createKeyButton(emoji, emoji, colors, false).apply {
-          bindKeyTouch(this, emoji)
-        }, LinearLayout.LayoutParams(0, height, 1f).apply {
-          setMargins(dp(4), 0, dp(4), 0) // Spaced-out margin
+        val btn = createKeyButton(emoji, emoji, colors, false)
+
+        // Fix 4: record recently used on tap or Kitchen selection
+        btn.setOnClickListener {
+          triggerVibration()
+          if (isEmojiKitchenMode) {
+            if (kitchenEmoji1 == null) {
+              kitchenEmoji1 = emoji
+            } else if (kitchenEmoji2 == null) {
+              kitchenEmoji2 = emoji
+            } else {
+              kitchenEmoji1 = kitchenEmoji2
+              kitchenEmoji2 = emoji
+            }
+            updateKitchenUi()
+          } else {
+            currentInputConnection?.commitText(emoji, 1)
+            typedBuffer = ""
+            recordRecentEmoji(emoji)
+          }
+        }
+
+        // Fix 8: skin tone long-press for supported emojis
+        val skinTones = skinTonesFor(emoji)
+        if (skinTones.isNotEmpty()) {
+          btn.setOnLongClickListener {
+            triggerVibration()
+            showAlternatesPopup(btn, skinTones)
+            true
+          }
+        } else {
+          btn.setOnLongClickListener(null)
+        }
+
+        addView(btn, LinearLayout.LayoutParams(0, height, 1f).apply {
+          setMargins(dp(4), 0, dp(4), 0)
         })
       }
     }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+  }
+
+  /** Returns skin-tone variants for supported emojis (fitzpatrick modifiers U+1F3FB–U+1F3FF) */
+  private fun skinTonesFor(emoji: String): List<String> {
+    val skinnable = setOf(
+      "👋","🤚","🖐","✋","🖖","👌","🤌","🤏","✌","🤞","🤟","🤘","🤙","👈","👉","👆","🖕","👇",
+      "☝","👍","👎","✊","👊","🤛","🤜","👏","🙌","🤲","🤝","🙏","✍","💅","🤳","💪","🦵","🦶",
+      "👂","🦻","👃","👶","🧒","👦","👧","🧑","👱","👨","🧔","👩","🧓","👴","👵","🫅"
+    )
+    if (emoji !in skinnable) return emptyList()
+    val modifiers = listOf("\uD83C\uDFFB", "\uD83C\uDFFC", "\uD83C\uDFFD", "\uD83C\uDFFE", "\uD83C\uDFFF")
+    return modifiers.map { "$emoji$it" }
+  }
+
+  /** Save emoji to recently-used list in SharedPrefs (max 24). */
+  private fun recordRecentEmoji(emoji: String) {
+    recentEmojis.remove(emoji)
+    recentEmojis.add(0, emoji)
+    if (recentEmojis.size > 24) recentEmojis = recentEmojis.take(24).toMutableList()
+    try {
+      val prefs = getSharedPreferences("clipvault_keyboard", Context.MODE_PRIVATE)
+      prefs.edit().putString("recentEmojis", recentEmojis.joinToString("\u001F")).apply()
+    } catch (_: Exception) {}
+  }
+
+  /** Load recently-used emojis from SharedPrefs. */
+  private fun loadRecentEmojis() {
+    try {
+      val raw = getSharedPreferences("clipvault_keyboard", Context.MODE_PRIVATE)
+        .getString("recentEmojis", "") ?: ""
+      recentEmojis = if (raw.isBlank()) mutableListOf()
+      else raw.split("\u001F").filter { it.isNotBlank() }.toMutableList()
+    } catch (_: Exception) {}
+  }
+
+  /**
+   * Generates and transmits high-res Emoji Kitchen mashup sticker to active input application.
+   */
+  private fun sendEmojiKitchenSticker(emoji1: String, emoji2: String) {
+    updateStatus("🍳 Making Kitchen Sticker...")
+    backgroundExecutor.execute {
+      try {
+        val file = com.clipvault.mobile.keyboard.EmojiKitchenEngine.createCompositeStickerFile(
+          this@ClipVaultKeyboardService, emoji1, emoji2
+        )
+        mainHandler.post {
+          sendStickerFile(file, "$emoji1 + $emoji2 Sticker", "$emoji1$emoji2")
+        }
+      } catch (e: Exception) {
+        mainHandler.post {
+          currentInputConnection?.commitText("$emoji1$emoji2", 1)
+          updateStatus("Inserted $emoji1$emoji2")
+        }
+      }
+    }
+  }
+
+  private fun sendStickerFile(file: File, descriptionText: String, fallbackText: String) {
+    val ic = currentInputConnection ?: return
+    val ei = currentInputEditorInfo ?: return
+    try {
+      val contentUri = FileProvider.getUriForFile(
+        this, "${packageName}.fileprovider", file
+      )
+
+      // Universal clipboard copy: enables pasting sticker into all apps even if direct commitContent is unsupported
+      try {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        val clip = ClipData.newUri(contentResolver, descriptionText, contentUri)
+        grantUriPermission("com.clipvault.mobile", contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        cm?.setPrimaryClip(clip)
+      } catch (_: Exception) {}
+
+      val description = ClipDescription(descriptionText, arrayOf("image/png"))
+      val contentInfo = InputContentInfoCompat(
+        contentUri, description, null
+      )
+      var flags = 0
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N_MR1) {
+        flags = flags or InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION
+      }
+      val committed = InputConnectionCompat.commitContent(
+        ic, ei, contentInfo, flags, null
+      )
+      if (committed) {
+        updateStatus("✓ Sticker Sent!")
+        kitchenEmoji1?.let { recordRecentEmoji(it) }
+        kitchenEmoji2?.let { recordRecentEmoji(it) }
+      } else {
+        ic.commitText(fallbackText, 1)
+        updateStatus("✓ Sticker in clipboard! ($fallbackText)")
+      }
+    } catch (e: Exception) {
+      ic.commitText(fallbackText, 1)
+      updateStatus("✓ Sticker created ($fallbackText)")
+    }
+  }
+
+  // ─── Gboard Parity Phase 3: GIFs ───────────────────────────────────────
+  private fun fetchGifs(query: String) {
+    backgroundExecutor.execute {
+        try {
+            val urlString = if (query.isEmpty() || query == "trending") {
+                "https://api.tenor.com/v1/trending?key=LIVDSRZULELA&limit=20"
+            } else {
+                "https://api.tenor.com/v1/search?q=${java.net.URLEncoder.encode(query, "UTF-8")}&key=LIVDSRZULELA&limit=20"
+            }
+            val url = java.net.URL(urlString)
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            val response = connection.inputStream.bufferedReader().use { it.readText() }
+            
+            val urls = mutableListOf<String>()
+            val regex = Regex(""""url":"([^"]+\.gif)"""")
+            val matches = regex.findAll(response)
+            for (match in matches) {
+                val gifUrl = match.groupValues[1]
+                if (!urls.contains(gifUrl)) {
+                    urls.add(gifUrl)
+                }
+            }
+            cachedGifs = urls.take(20).toMutableList()
+            mainHandler.post { refreshKeyboard() }
+        } catch (e: Exception) {}
+    }
+  }
+
+  private fun sendGifToApp(gifUrl: String) {
+    backgroundExecutor.execute {
+        try {
+            val gifDir = java.io.File(cacheDir, "gifs")
+            if (!gifDir.exists()) gifDir.mkdirs()
+            val file = java.io.File(gifDir, "shared_gif_${System.currentTimeMillis()}.gif")
+            
+            java.net.URL(gifUrl).openStream().use { input ->
+                file.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            
+            val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val clipDescription = android.content.ClipDescription("GIF", arrayOf("image/gif"))
+            
+            val info = androidx.core.view.inputmethod.InputContentInfoCompat(uri, clipDescription, null)
+            val ic = currentInputConnection
+            if (ic != null && currentInputEditorInfo != null) {
+                androidx.core.view.inputmethod.InputConnectionCompat.commitContent(
+                    ic, currentInputEditorInfo, info, 
+                    androidx.core.view.inputmethod.InputConnectionCompat.INPUT_CONTENT_GRANT_READ_URI_PERMISSION, null
+                )
+            }
+            mainHandler.post { updateStatus("\u2713 GIF Sent") }
+        } catch (e: Exception) {
+            mainHandler.post { updateStatus("\u274C Failed to send") }
+        }
+    }
+  }
+
+  private fun addGifPanel(parent: LinearLayout, colors: ThemeColors) {
+    val searchBar = TextView(this).apply {
+        text = if (isGifSearchMode) "Search: $gifSearchQuery" + "_" else "🔍 Search GIFs..."
+        setBackgroundColor(Color.parseColor("#22000000"))
+        setPadding(dp(12), dp(12), dp(12), dp(12))
+        setTextColor(colors.text)
+        textSize = 16f
+        setOnClickListener {
+            triggerVibration()
+            isGifSearchMode = !isGifSearchMode
+            if (isGifSearchMode) gifSearchQuery = "" else {
+                gifSearchQuery = "trending"
+                fetchGifs(gifSearchQuery)
+            }
+            refreshKeyboard()
+        }
+    }
+    parent.addView(searchBar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+    val content = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(2), dp(4), dp(2), dp(4))
+
+        if (cachedGifs.isEmpty()) {
+            addView(TextView(this@ClipVaultKeyboardService).apply {
+                text = "Loading GIFs..."
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+                setTextColor(colors.muted)
+            })
+            if (!isGifSearchMode) fetchGifs(gifSearchQuery)
+        } else {
+            cachedGifs.chunked(3).forEach { rowUrls ->
+                addView(LinearLayout(this@ClipVaultKeyboardService).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(4), 0, dp(4))
+
+                    rowUrls.forEach { url ->
+                        addView(Button(this@ClipVaultKeyboardService).apply {
+                            text = "GIF"
+                            textSize = 14f
+                            setTextColor(colors.text)
+                            setBackgroundColor(Color.parseColor("#33000000"))
+                            setOnClickListener {
+                                triggerVibration()
+                                sendGifToApp(url)
+                            }
+                        }, LinearLayout.LayoutParams(0, dp(80), 1f).apply {
+                            setMargins(dp(4), 0, dp(4), 0)
+                        })
+                    }
+                }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            }
+        }
+    }
+
+    parent.addView(ScrollView(this).apply {
+        isVerticalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        addView(content)
+    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
   }
 
   private fun addSymbolsPanel(parent: LinearLayout, colors: ThemeColors, height: Int) {
@@ -510,128 +1481,559 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   }
 
   private fun addClipboardPanel(parent: LinearLayout, colors: ThemeColors) {
-    val pinnedClips = NativeClipStore.getKeyboardPins(this)
-    val recentClips = cachedRecentClips
+    val isUrdu = layoutMode == LayoutMode.UR || layoutMode == LayoutMode.AR
+    val lSearch = if (isUrdu) "\uD83D\uDD0D تلاش کریں..." else "\uD83D\uDD0D Search clips..."
+    val lPinned = if (isUrdu) "\uD83D\uDCCC پن کردہ" else "\uD83D\uDCCC Pinned"
+    val lFav    = if (isUrdu) "\u2B50 پسندیدہ" else "\u2B50 Favorites"
+    val lRecent = if (isUrdu) "\uD83D\uDD51 حالیہ" else "\uD83D\uDD51 Recent"
+    val lEmpty  = if (isUrdu) "ابھی تک کوئی کلپ نہیں" else "No clips yet"
 
-    // Outer scrollable container — fills fixed-height panel
-    val content = LinearLayout(this).apply {
-      orientation = LinearLayout.VERTICAL
-      setPadding(dp(4), dp(4), dp(4), dp(4))
+    // ─── Tab definitions ─────────────────────────────────────────────────────
+    data class Tab(val id: String, val label: String)
+    val tabs = listOf(
+      Tab("All",    if (isUrdu) "سب" else "All"),
+      Tab("Fav",    "\u2B50"),
+      Tab("Pinned", "\uD83D\uDCCC"),
+      Tab("Template","\uD83D\uDCCB"),
+      Tab("URL",    "\uD83D\uDD17"),
+      Tab("Phone",  "\uD83D\uDCDE"),
+      Tab("Email",  "\u2709"),
+      Tab("Code",   "\uD83D\uDCBB"),
+    )
 
-      addView(Button(this@ClipVaultKeyboardService).apply {
-         text = "🔍 Search Clips"
-         setTextColor(colors.accent)
-         textSize = 14f
-         isAllCaps = false
-         background = statusBackground(colors)
-         setOnClickListener {
-           isSearchingClips = true
-           panelMode = PanelMode.KEYS
-           typedBuffer = ""
-           updateStatus("Type to search clips...")
-           refreshKeyboard()
-         }
-      }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)).apply {
-         setMargins(dp(4), dp(2), dp(4), dp(10))
-      })
-
-      if (pinnedClips.isEmpty() && recentClips.isEmpty()) {
-        addView(TextView(this@ClipVaultKeyboardService).apply {
-          text = "No saved clips yet"
-          setTextColor(colors.muted)
-          textSize = 15f
-          gravity = Gravity.CENTER
-          setPadding(0, dp(20), 0, dp(20))
-        })
-        return@apply
-      }
-
-      // ── Pinned section ──────────────────────────────────────────────────────
-      if (pinnedClips.isNotEmpty()) {
-        addView(TextView(this@ClipVaultKeyboardService).apply {
-          text = "\uD83D\uDCCC Pinned"
-          textSize = 11f
-          typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
-          setTextColor(colors.accent)
-          setPadding(dp(4), dp(2), dp(4), dp(2))
-        })
-        pinnedClips.forEach { clip -> addClipRow(this, clip, colors, isPinned = true) }
-      }
-
-      // ── Recent section ──────────────────────────────────────────────────────
-      if (recentClips.isNotEmpty()) {
-        if (pinnedClips.isNotEmpty()) {
-          addView(TextView(this@ClipVaultKeyboardService).apply {
-            text = "\uD83D\uDD51 Recent"
-            textSize = 11f
-            typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
-            setTextColor(colors.accent)
-            setPadding(dp(4), dp(6), dp(4), dp(2))
-          })
+    // ─── Helper: compute clips for current tab + search ──────────────────────
+    fun resolveClips(): List<String> {
+      val q = clipSearchQuery.trim()
+      return when (selectedClipTab) {
+        "Fav"    -> NativeClipStore.searchByCategory(this, q, "",      favoritesOnly = true,  limit = 100)
+        "Pinned" -> NativeClipStore.getKeyboardPins(this).let { pins ->
+          if (q.isBlank()) pins else pins.filter { it.contains(q, ignoreCase = true) }
         }
-        recentClips.forEach { clip ->
-          if (!pinnedClips.contains(clip)) addClipRow(this, clip, colors, isPinned = false)
-        }
+        "URL", "Phone", "Email", "Code", "Template" ->
+          NativeClipStore.searchByCategory(this, q, selectedClipTab, favoritesOnly = false, limit = 100)
+        else /* All */ -> if (q.isBlank()) cachedRecentClips else NativeClipStore.search(this, q, 100)
       }
     }
 
-    parent.addView(ScrollView(this).apply {
-      isVerticalScrollBarEnabled = false
-      overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-      addView(content)
-    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    // ─── Outer vertical layout ────────────────────────────────────────────────
+    val container = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(dp(4), dp(4), dp(4), dp(2))
+
+      // ── Row 1: Inline search field ────────────────────────────────────────
+      val searchBox = android.widget.EditText(this@ClipVaultKeyboardService).apply {
+        hint = lSearch
+        setHintTextColor(colors.muted)
+        setTextColor(colors.text)
+        textSize = 13f
+        background = GradientDrawable().apply {
+          shape = GradientDrawable.RECTANGLE
+          cornerRadius = dp(8).toFloat()
+          setColor(colors.surface)
+          setStroke(dp(1), colors.stroke)
+        }
+        setPadding(dp(10), dp(6), dp(10), dp(6))
+        setSingleLine(true)
+        isFocusable = true
+        isFocusableInTouchMode = true
+        // Pre-populate with current search query (preserve across refreshes)
+        setText(clipSearchQuery)
+        setSelection(clipSearchQuery.length)
+        addTextChangedListener(object : android.text.TextWatcher {
+          override fun beforeTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+          override fun onTextChanged(s: CharSequence?, st: Int, c: Int, a: Int) {}
+          override fun afterTextChanged(s: android.text.Editable?) {
+            clipSearchQuery = s?.toString() ?: ""
+            refreshKeyboard()
+          }
+        })
+      }
+      clipSearchEditText = searchBox
+      addView(searchBox, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(38)).apply {
+        setMargins(dp(2), dp(2), dp(2), dp(4))
+      })
+
+      // ── Row 2: Category tabs ─────────────────────────────────────────────
+      val tabBar = HorizontalScrollView(this@ClipVaultKeyboardService).apply {
+        isHorizontalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_NEVER
+        val tabRow = LinearLayout(this@ClipVaultKeyboardService).apply {
+          orientation = LinearLayout.HORIZONTAL
+          gravity = Gravity.CENTER_VERTICAL
+          setPadding(dp(2), 0, dp(2), 0)
+          tabs.forEach { tab ->
+            val isActive = tab.id == selectedClipTab
+            val btn = TextView(this@ClipVaultKeyboardService).apply {
+              text = tab.label
+              textSize = 12f
+              gravity = Gravity.CENTER
+              setPadding(dp(10), dp(4), dp(10), dp(4))
+              setTextColor(if (isActive) colors.background else colors.accent)
+              background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dp(12).toFloat()
+                setColor(if (isActive) colors.accent else android.graphics.Color.TRANSPARENT)
+                if (!isActive) setStroke(dp(1), colors.stroke)
+              }
+              setOnClickListener {
+                if (hapticsEnabled) triggerVibration()
+                selectedClipTab = tab.id
+                clipSearchQuery = ""
+                refreshKeyboard()
+              }
+            }
+            addView(btn, LinearLayout.LayoutParams(
+              ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)
+            ).apply { setMargins(dp(2), 0, dp(2), 0) })
+          }
+        }
+        addView(tabRow)
+      }
+      addView(tabBar, LinearLayout.LayoutParams(
+        ViewGroup.LayoutParams.MATCH_PARENT, dp(34)
+      ).apply { setMargins(0, 0, 0, dp(4)) })
+
+      // ── Row 3: Clips list (scrollable) ───────────────────────────────────
+      val clipsToShow = resolveClips()
+      val pinnedInAll = if (selectedClipTab == "All" && clipSearchQuery.isBlank())
+        NativeClipStore.getKeyboardPins(this@ClipVaultKeyboardService) else emptyList()
+      val favoritesInAll = if (selectedClipTab == "All" && clipSearchQuery.isBlank())
+        cachedFavoriteClips else emptyList()
+
+      val clipContent = LinearLayout(this@ClipVaultKeyboardService).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, 0, 0, dp(4))
+
+        if (clipsToShow.isEmpty() && pinnedInAll.isEmpty() && favoritesInAll.isEmpty()) {
+          addView(TextView(this@ClipVaultKeyboardService).apply {
+            text = lEmpty
+            setTextColor(colors.muted)
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(16), 0, dp(16))
+          }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+          return@apply
+        }
+
+        // Pinned section (only in "All" tab without search)
+        if (pinnedInAll.isNotEmpty()) {
+          addSectionLabel(this, lPinned, colors)
+          pinnedInAll.forEach { clip ->
+            addClipRow(this, clip, colors, isPinned = true, isFavorite = favoritesInAll.contains(clip))
+          }
+        }
+
+        // Favorites section (only in "All" tab without search, exclude already pinned)
+        val favNotPinned = favoritesInAll.filter { !pinnedInAll.contains(it) }
+        if (favNotPinned.isNotEmpty()) {
+          addSectionLabel(this, lFav, colors)
+          favNotPinned.forEach { clip ->
+            addClipRow(this, clip, colors, isPinned = false, isFavorite = true)
+          }
+        }
+
+        // Recent / filtered clips (exclude already shown)
+        val alreadyShown = (pinnedInAll + favoritesInAll).toSet()
+        val filtered = if (selectedClipTab == "All" && clipSearchQuery.isBlank())
+          clipsToShow.filter { !alreadyShown.contains(it) } else clipsToShow
+
+        if (filtered.isNotEmpty()) {
+          if (selectedClipTab == "All" && clipSearchQuery.isBlank() && alreadyShown.isNotEmpty()) {
+            addSectionLabel(this, lRecent, colors)
+          }
+          filtered.forEach { clip ->
+            addClipRow(this, clip, colors, isPinned = false,
+              isFavorite = cachedFavoriteClips.contains(clip))
+          }
+        }
+      }
+
+      addView(ScrollView(this@ClipVaultKeyboardService).apply {
+        isVerticalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        addView(clipContent)
+      }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+    }
+
+    parent.addView(container, LinearLayout.LayoutParams(
+      ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+    ))
   }
 
-  private fun addClipRow(parent: LinearLayout, clip: String, colors: ThemeColors, isPinned: Boolean) {
-    parent.addView(LinearLayout(this).apply {
+  // ─── Section label helper ─────────────────────────────────────────────────────
+  private fun addSectionLabel(parent: LinearLayout, text: String, colors: ThemeColors) {
+    parent.addView(TextView(this).apply {
+      this.text = text
+      textSize = 11f
+      typeface = android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.BOLD)
+      setTextColor(colors.accent)
+      setPadding(dp(4), dp(4), dp(4), dp(2))
+    }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+  }
+
+  // ─── Long press clip action menu (PopupWindow) ───────────────────────────────
+  private fun showClipActionMenu(anchor: View, clip: String, colors: ThemeColors, isPinned: Boolean, isFavorite: Boolean) {
+    dismissAlternatePopup()
+    val isUrdu = layoutMode == LayoutMode.UR || layoutMode == LayoutMode.AR
+
+    data class Action(val label: String, val color: Int, val action: () -> Unit)
+    val actions = listOf(
+      Action(if (isUrdu) "\uD83D\uDCCB کاپی" else "\uD83D\uDCCB Copy",
+        colors.accent) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("", clip))
+        updateStatus(if (isUrdu) "✓ کاپی" else "✓ copied")
+      },
+      Action(if (isUrdu) "\u2B50 ${if (isFavorite) "ہٹائیں" else "پسندیدہ"}" else "\u2B50 ${if (isFavorite) "Unfav" else "Fav"}",
+        if (isFavorite) android.graphics.Color.rgb(251, 191, 36) else colors.muted) {
+        backgroundExecutor.execute {
+          NativeClipStore.toggleFavoriteByText(this@ClipVaultKeyboardService, clip)
+          mainHandler.post {
+            cachedFavoriteClips = NativeClipStore.favorites(this@ClipVaultKeyboardService, 15)
+            updateStatus(if (isFavorite) "\u2B50 removed" else "\u2B50 favorited")
+            refreshKeyboard()
+          }
+        }
+      },
+      Action(if (isPinned) (if (isUrdu) "\uD83D\uDCCB ان پن" else "\uD83D\uDCCB Unpin")
+             else (if (isUrdu) "\uD83D\uDCCC پن" else "\uD83D\uDCCC Pin"),
+        colors.accent) {
+        val nowPinned = NativeClipStore.toggleKeyboardPin(this@ClipVaultKeyboardService, clip)
+        updateStatus(if (nowPinned) "\uD83D\uDCCC pinned" else "unpinned")
+        refreshCachedDataAsync()
+        refreshKeyboard()
+      },
+      Action(if (isUrdu) "\uD83D\uDE80 پیسٹ" else "\uD83D\uDE80 Paste",
+        android.graphics.Color.rgb(99, 215, 125)) {
+        currentInputConnection?.commitText(clip, 1)
+        typedBuffer = ""
+        panelMode = PanelMode.KEYS
+        clipSearchQuery = ""
+        updateStatus(if (isUrdu) "✓ چسپاں" else "✓ pasted")
+        refreshKeyboard()
+      },
+    )
+
+    val container = LinearLayout(this).apply {
       orientation = LinearLayout.HORIZONTAL
-      gravity = Gravity.CENTER_VERTICAL
+      gravity = Gravity.CENTER
+      setPadding(dp(6), dp(6), dp(6), dp(6))
       background = GradientDrawable().apply {
         shape = GradientDrawable.RECTANGLE
-        cornerRadius = dp(8).toFloat()
-        setColor(if (isPinned) (colors.specialKey) else colors.key)
+        cornerRadius = dp(10).toFloat()
+        setColor(colors.surface)
         setStroke(dp(1), colors.stroke)
       }
-      setPadding(dp(8), dp(6), dp(4), dp(6))
+      elevation = dp(8).toFloat()
 
-      // Clip text area — click to paste
-      addView(TextView(this@ClipVaultKeyboardService).apply {
-        val displayText = clip.trim()
-        text = displayText
-        textSize = 12.5f
-        maxLines = 4
+      actions.forEach { act ->
+        addView(TextView(this@ClipVaultKeyboardService).apply {
+          text = act.label
+          textSize = 12f
+          gravity = Gravity.CENTER
+          setTextColor(act.color)
+          setPadding(dp(10), dp(8), dp(10), dp(8))
+          background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dp(6).toFloat()
+            setColor(android.graphics.Color.TRANSPARENT)
+          }
+          setOnClickListener {
+            alternatePopup?.dismiss()
+            alternatePopup = null
+            act.action()
+          }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)).apply {
+          setMargins(dp(2), 0, dp(2), 0)
+        })
+      }
+    }
+
+    alternatePopup = PopupWindow(
+      container,
+      ViewGroup.LayoutParams.WRAP_CONTENT,
+      ViewGroup.LayoutParams.WRAP_CONTENT,
+      false,
+    ).apply {
+      isOutsideTouchable = true
+      isClippingEnabled = true
+      elevation = dp(10).toFloat()
+      showAsDropDown(anchor, 0, -dp(56))
+    }
+  }
+
+  private fun addClipRow(
+    parent: LinearLayout,
+    clip: String,
+    colors: ThemeColors,
+    isPinned: Boolean,
+    isFavorite: Boolean = false,
+  ) {
+    val PREVIEW_LIMIT = 120
+    val displayText = clip.trim()
+    val isLong = displayText.length > PREVIEW_LIMIT
+    val previewText = if (isLong) "${displayText.take(PREVIEW_LIMIT)}..." else displayText
+    val isRtl = containsRtlText("", displayText)
+    val tf = if (isRtl) rtlTypeface ?: buildRtlTypeface().also { rtlTypeface = it }
+             else android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.NORMAL)
+
+    val rowBg = GradientDrawable().apply {
+      shape = GradientDrawable.RECTANGLE
+      cornerRadius = dp(8).toFloat()
+      setColor(if (isPinned) colors.specialKey else colors.key)
+      setStroke(dp(1), if (isFavorite) android.graphics.Color.argb(120, 251, 191, 36) else colors.stroke)
+    }
+
+    parent.addView(LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      background = rowBg
+      setPadding(dp(10), dp(7), dp(8), dp(7))
+
+      // ── Top: clip text ────────────────────────────────────────────────────
+      val textView = TextView(this@ClipVaultKeyboardService).apply {
+        text = previewText
+        textSize = 13f
+        maxLines = 3
         ellipsize = android.text.TextUtils.TruncateAt.END
         setTextColor(colors.text)
-        typeface = if (containsRtlText("", displayText)) {
-          rtlTypeface ?: buildRtlTypeface().also { rtlTypeface = it }
-        } else {
-          android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.NORMAL)
-        }
-        setOnClickListener {
-          currentInputConnection?.commitText(clip, 1)
-          typedBuffer = ""
-          panelMode = PanelMode.KEYS
-          updateStatus("✓ clip inserted")
-          refreshKeyboard()
-        }
-      }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        typeface = tf
+        textDirection = if (isRtl) View.TEXT_DIRECTION_RTL else View.TEXT_DIRECTION_LTR
+      }
 
-      // Pin / unpin button
-      addView(TextView(this@ClipVaultKeyboardService).apply {
-        text = if (isPinned) "\uD83D\uDCCC" else "\uD83D\uDCCB"
-        textSize = 16f
-        gravity = Gravity.CENTER
-        setPadding(dp(8), dp(4), dp(4), dp(4))
-        setOnClickListener {
-          val nowPinned = NativeClipStore.toggleKeyboardPin(this@ClipVaultKeyboardService, clip)
-          updateStatus(if (nowPinned) "📌 pinned" else "unpinned")
-          refreshCachedDataAsync()
-          refreshKeyboard()
+      // Long-press triggers action menu; tap pastes immediately
+      val longPressRunnable: Runnable = Runnable {
+        if (hapticsEnabled) triggerVibration()
+        showClipActionMenu(textView, clip, colors, isPinned, isFavorite)
+      }
+      textView.setOnTouchListener { v, event ->
+        when (event.action) {
+          MotionEvent.ACTION_DOWN -> {
+            repeatHandler.postDelayed(longPressRunnable, 400L)
+            false
+          }
+          MotionEvent.ACTION_UP -> {
+            repeatHandler.removeCallbacks(longPressRunnable)
+            false
+          }
+          MotionEvent.ACTION_CANCEL -> {
+            repeatHandler.removeCallbacks(longPressRunnable)
+            false
+          }
+          else -> false
         }
-      }, LinearLayout.LayoutParams(dp(40), ViewGroup.LayoutParams.WRAP_CONTENT))
+      }
+      textView.setOnClickListener {
+        repeatHandler.removeCallbacks(longPressRunnable)
+        currentInputConnection?.commitText(clip, 1)
+        typedBuffer = ""
+        panelMode = PanelMode.KEYS
+        clipSearchQuery = ""
+        selectedClipTab = "All"
+        updateStatus(if (this@ClipVaultKeyboardService.layoutMode == LayoutMode.UR || this@ClipVaultKeyboardService.layoutMode == LayoutMode.AR) "✓ چسپاں" else "✓ pasted")
+        refreshKeyboard()
+      }
+      addView(textView, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+      // ── Bottom: meta row (favorite star | expand | pin badge) ────────────
+      val metaRow = LinearLayout(this@ClipVaultKeyboardService).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(0, dp(2), 0, 0)
+
+        // Favorite toggle
+        addView(TextView(this@ClipVaultKeyboardService).apply {
+          text = if (isFavorite) "\u2B50" else "\u2606"
+          textSize = 14f
+          setTextColor(if (isFavorite) android.graphics.Color.rgb(251, 191, 36) else colors.muted)
+          setPadding(0, 0, dp(8), 0)
+          setOnClickListener {
+            backgroundExecutor.execute {
+              NativeClipStore.toggleFavoriteByText(this@ClipVaultKeyboardService, clip)
+              mainHandler.post {
+                cachedFavoriteClips = NativeClipStore.favorites(this@ClipVaultKeyboardService, 15)
+                refreshKeyboard()
+              }
+            }
+          }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)))
+
+        // Pin badge
+        if (isPinned) {
+          addView(TextView(this@ClipVaultKeyboardService).apply {
+            text = "\uD83D\uDCCC"
+            textSize = 12f
+            setPadding(0, 0, dp(8), 0)
+            setTextColor(colors.accent)
+          }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)))
+        }
+
+        // Smart Actions
+        val cleanClip = clip.trim()
+        val isUrl = android.util.Patterns.WEB_URL.matcher(cleanClip).matches() || cleanClip.startsWith("http://") || cleanClip.startsWith("https://")
+        val isPhone = cleanClip.length in 7..15 && android.util.Patterns.PHONE.matcher(cleanClip).matches() && cleanClip.all { it.isDigit() || it == '+' || it == '-' || it == ' ' || it == '(' || it == ')' }
+        
+        if (isUrl) {
+          addView(TextView(this@ClipVaultKeyboardService).apply {
+            text = "↗ Open"
+            textSize = 11f
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            setTextColor(android.graphics.Color.WHITE)
+            background = GradientDrawable().apply {
+              shape = GradientDrawable.RECTANGLE
+              cornerRadius = dp(4).toFloat()
+              setColor(android.graphics.Color.rgb(59, 130, 246)) // Blue
+            }
+            setOnClickListener {
+              try {
+                val url = if (!cleanClip.startsWith("http")) "https://$cleanClip" else cleanClip
+                val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)).apply {
+                  addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+              } catch (e: Exception) { }
+            }
+          }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, dp(8), 0) })
+        } else if (isPhone) {
+          addView(TextView(this@ClipVaultKeyboardService).apply {
+            text = "📞 Call"
+            textSize = 11f
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            setTextColor(android.graphics.Color.WHITE)
+            background = GradientDrawable().apply {
+              shape = GradientDrawable.RECTANGLE
+              cornerRadius = dp(4).toFloat()
+              setColor(android.graphics.Color.rgb(16, 185, 129)) // Green
+            }
+            setOnClickListener {
+              try {
+                val intent = Intent(Intent.ACTION_DIAL, android.net.Uri.parse("tel:$cleanClip")).apply {
+                  addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(intent)
+              } catch (e: Exception) { }
+            }
+          }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(0, 0, dp(8), 0) })
+        }
+
+        // Spacer
+        addView(View(this@ClipVaultKeyboardService),
+          LinearLayout.LayoutParams(0, 1, 1f))
+
+        // "▼ More" expand button for long text
+        if (isLong) {
+          addView(TextView(this@ClipVaultKeyboardService).apply {
+            text = if (this@ClipVaultKeyboardService.layoutMode == LayoutMode.UR || this@ClipVaultKeyboardService.layoutMode == LayoutMode.AR) "▼ مزید" else "▼ More"
+            textSize = 11f
+            setTextColor(colors.muted)
+            setPadding(dp(4), 0, 0, 0)
+            setOnClickListener { showFullTextPopup(clip, colors) }
+          }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)))
+        }
+
+        // Pin toggle button
+        addView(TextView(this@ClipVaultKeyboardService).apply {
+          text = if (isPinned) "\uD83D\uDCCB" else "\uD83D\uDCCC"
+          textSize = 14f
+          gravity = Gravity.CENTER
+          setPadding(dp(8), 0, 0, 0)
+          setTextColor(colors.muted)
+          setOnClickListener {
+            val nowPinned = NativeClipStore.toggleKeyboardPin(this@ClipVaultKeyboardService, clip)
+            updateStatus(if (nowPinned) "\uD83D\uDCCC pinned" else "unpinned")
+            refreshCachedDataAsync()
+            refreshKeyboard()
+          }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(28)))
+      }
+      addView(metaRow, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
     }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
       setMargins(0, dp(2), 0, dp(2))
     })
+  }
+
+  // ─── Full text preview popup (for long clips) ─────────────────────────────────
+  private fun showFullTextPopup(clip: String, colors: ThemeColors) {
+    dismissAlternatePopup()
+    val isUrdu = layoutMode == LayoutMode.UR || layoutMode == LayoutMode.AR
+    val isRtl = containsRtlText("", clip)
+    val tf = if (isRtl) rtlTypeface ?: buildRtlTypeface().also { rtlTypeface = it }
+             else android.graphics.Typeface.create(android.graphics.Typeface.SANS_SERIF, android.graphics.Typeface.NORMAL)
+
+    val container = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      setPadding(dp(12), dp(10), dp(12), dp(10))
+      background = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(12).toFloat()
+        setColor(colors.surface)
+        setStroke(dp(1), colors.stroke)
+      }
+      elevation = dp(12).toFloat()
+
+      // Scrollable text
+      addView(ScrollView(this@ClipVaultKeyboardService).apply {
+        isVerticalScrollBarEnabled = true
+        addView(TextView(this@ClipVaultKeyboardService).apply {
+          text = clip
+          textSize = 13.5f
+          setTextColor(colors.text)
+          typeface = tf
+          textDirection = if (isRtl) View.TEXT_DIRECTION_RTL else View.TEXT_DIRECTION_LTR
+          setPadding(0, 0, 0, dp(8))
+        })
+      }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(160)))
+
+      // Action buttons: Paste + Close
+      addView(LinearLayout(this@ClipVaultKeyboardService).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+
+        addView(TextView(this@ClipVaultKeyboardService).apply {
+          text = if (isUrdu) "\uD83D\uDE80 چسپاں" else "\uD83D\uDE80 Paste"
+          textSize = 13f
+          gravity = Gravity.CENTER
+          setTextColor(android.graphics.Color.rgb(99, 215, 125))
+          setPadding(dp(16), dp(8), dp(16), dp(8))
+          background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE; cornerRadius = dp(8).toFloat()
+            setColor(android.graphics.Color.argb(30, 99, 215, 125))
+            setStroke(dp(1), android.graphics.Color.argb(80, 99, 215, 125))
+          }
+          setOnClickListener {
+            alternatePopup?.dismiss(); alternatePopup = null
+            currentInputConnection?.commitText(clip, 1)
+            typedBuffer = ""
+            panelMode = PanelMode.KEYS
+            clipSearchQuery = ""
+            updateStatus(if (isUrdu) "✓ چسپاں" else "✓ pasted")
+            refreshKeyboard()
+          }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply { setMargins(0, 0, dp(8), 0) })
+
+        addView(TextView(this@ClipVaultKeyboardService).apply {
+          text = if (isUrdu) "✕ بند" else "✕ Close"
+          textSize = 13f
+          gravity = Gravity.CENTER
+          setTextColor(colors.muted)
+          setPadding(dp(16), dp(8), dp(16), dp(8))
+          setOnClickListener { alternatePopup?.dismiss(); alternatePopup = null }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)))
+      }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+    }
+
+    val screenW = resources.displayMetrics.widthPixels
+    alternatePopup = PopupWindow(
+      container,
+      (screenW * 0.92).toInt(),
+      ViewGroup.LayoutParams.WRAP_CONTENT,
+      false,
+    ).apply {
+      isOutsideTouchable = true
+      isClippingEnabled = false
+      elevation = dp(12).toFloat()
+      showAtLocation(container, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL, 0, dp(60))
+    }
   }
 
   private fun addDiacriticsPanel(parent: LinearLayout, colors: ThemeColors) {
@@ -708,6 +2110,49 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     alternateKeys.chunked(6).forEach { row -> addKeyRow(parent, row, colors, dp(44), weight = 1f) }
   }
 
+  private fun addTextEditPanel(parent: LinearLayout, colors: ThemeColors) {
+    val rows = listOf(
+      listOf("select_all", "cut", "copy", "paste"),
+      listOf("undo", "redo", "home", "end", "keys")
+    )
+    rows.forEach { row -> addKeyRow(parent, row, colors, dp(44), weight = 1f) }
+  }
+
+  private fun addSettingsPanel(parent: LinearLayout, colors: ThemeColors) {
+    val scroll = ScrollView(this).apply {
+      layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+      isFillViewport = true
+      isVerticalScrollBarEnabled = false
+    }
+    val content = LinearLayout(this).apply {
+      orientation = LinearLayout.VERTICAL
+      gravity = Gravity.CENTER_HORIZONTAL
+      setPadding(dp(6), dp(4), dp(6), dp(4))
+    }
+
+    val header = TextView(this).apply {
+      text = "⚙️ Keyboard Settings\n${com.clipvault.mobile.keyboard.VersionControlManager.getFormattedVersionInfo()}"
+      textSize = 14f
+      typeface = Typeface.DEFAULT_BOLD
+      setTextColor(colors.accent)
+      setPadding(0, dp(4), 0, dp(8))
+      gravity = Gravity.CENTER
+    }
+    content.addView(header)
+
+    val rows = listOf(
+      listOf("toggle_autocorrect", "toggle_doublespace"),
+      listOf("toggle_offline_voice", "toggle_system_theme"),
+      listOf("haptics_toggle", "keys"),
+      listOf("height_minus", "height_plus", "keysize_minus", "keysize_plus"),
+      listOf("theme", "languages")
+    )
+    rows.forEach { row -> addKeyRow(content, row, colors, dp(44)) }
+
+    scroll.addView(content)
+    parent.addView(scroll)
+  }
+
   private fun addKeyRow(parent: LinearLayout, keys: List<String>, colors: ThemeColors, height: Int, weight: Float = 0f) {
     val lp = if (weight > 0f) {
       LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, weight)
@@ -721,11 +2166,14 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
       keys.forEach { key ->
         val keyHeight = if (weight > 0f) ViewGroup.LayoutParams.MATCH_PARENT else height
-        addView(createKeyButton(labelFor(key), key, colors, isControlKey(key)).apply {
+        val btn = createKeyButton(labelFor(key), key, colors, isControlKey(key)).apply {
           bindKeyTouch(this, key)
-        }, LinearLayout.LayoutParams(0, keyHeight, keyWeight(key)).apply {
-          setMargins(0, 0, 0, 0)
+        }
+        addView(btn, LinearLayout.LayoutParams(0, keyHeight, keyWeight(key)).apply {
+          setMargins(dp(3), dp(2), dp(3), dp(2))
         })
+        
+        keyButtons[key] = btn
       }
     }, lp)
   }
@@ -740,7 +2188,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
         addView(createKeyButton(labelFor(key), key, colors, isControlKey(key)).apply {
           bindKeyTouch(this, key)
         }, LinearLayout.LayoutParams(symbolKeyWidth(key), height).apply {
-          setMargins(0, 0, 0, 0)
+          setMargins(dp(3), dp(2), dp(3), dp(2))
         })
       }
     }
@@ -788,11 +2236,20 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       key.startsWith("download_") || key.startsWith("remove_")
 
     return Button(this).apply {
+      tag = key
       text = displayText
       setSingleLine(!allowsTwoLines)
       maxLines = if (allowsTwoLines) 2 else 1
       ellipsize = android.text.TextUtils.TruncateAt.END
+      val isActionEnter = key == "enter" && (currentInputEditorInfo?.imeOptions?.and(android.view.inputmethod.EditorInfo.IME_MASK_ACTION) in listOf(
+          android.view.inputmethod.EditorInfo.IME_ACTION_SEND,
+          android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH,
+          android.view.inputmethod.EditorInfo.IME_ACTION_GO,
+          android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+      ))
+
       setTextColor(when {
+        isActionEnter -> Color.WHITE
         usesPreview -> previewColors.text
         special || micActive -> colors.accent
         else -> colors.text
@@ -816,6 +2273,13 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
           cornerRadius = dp(colors.radius).toFloat()
           setColor(Color.argb(220, 180, 30, 30))  // dark red base
           setStroke(dp(2), Color.rgb(220, 60, 60))
+        }
+      } else if (isActionEnter) {
+        GradientDrawable().apply {
+          shape = GradientDrawable.RECTANGLE
+          cornerRadius = dp(colors.radius).toFloat()
+          setColor(colors.accent)
+          setStroke(dp(1), colors.stroke)
         }
       } else {
         keyBackground(previewColors, if (usesPreview) false else special)
@@ -841,11 +2305,45 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     }
   }
 
+  private fun ensureKeyHitBoxes() {
+    if (keyHitBoxes.isEmpty() && keyButtons.isNotEmpty()) {
+      val loc = IntArray(2)
+      for ((k, b) in keyButtons) {
+        if (!b.isShown || b.width == 0) continue
+        b.getLocationOnScreen(loc)
+        keyHitBoxes[k] = android.graphics.RectF(
+          loc[0].toFloat(), loc[1].toFloat(),
+          (loc[0] + b.width).toFloat(), (loc[1] + b.height).toFloat()
+        )
+      }
+    }
+  }
+
   private fun handleResponsiveKeyTouch(view: View, key: String, event: MotionEvent): Boolean {
     when (event.action) {
       MotionEvent.ACTION_DOWN -> {
+        // --- Swipe typing start detection (instantaneous, no synchronous layout query) ---
+        if (layoutMode == LayoutMode.EN && !isControlKey(key) && key.length == 1 && key[0].isLetter() && panelMode == PanelMode.KEYS) {
+            swipePath.clear()
+            swipeKeySequence.clear()
+            lastSwipeKey = key
+            swipeStartTime = System.currentTimeMillis()
+            swipePath.add(SwipePoint(event.rawX, event.rawY, swipeStartTime))
+            swipeKeySequence.add(key)
+            isSwipeActive = false
+        }
+        // ------------------------------------
+
+        if (key.length == 1 && panelMode == PanelMode.KEYS && layoutMode != LayoutMode.SYMBOLS && !isControlKey(key)) {
+            showKeyPreview(view, key, labelFor(key))
+        }
+        if (key == "space") {
+            spaceSwipeStartX = event.rawX
+            isSpaceSwiping = false
+        }
+
         view.isPressed = true
-        if (hapticsEnabled) triggerVibration()
+        if (hapticsEnabled) triggerVibration(view)
         touchConsumed = false
         slideHighlightedIndex = -1
         dismissAlternatePopup()
@@ -854,6 +2352,16 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
         val alternates = alternatesForKey(key)
         when {
+          key == "," || key == "urdu_comma" || key == "emoji" || key == "emoji_comma" -> {
+            pendingLongPressRunnable = Runnable {
+              touchConsumed = true
+              longPressTriggered = true
+              if (hapticsEnabled) triggerVibration(view)
+              panelMode = PanelMode.EMOJI
+              refreshKeyboard()
+            }
+            repeatHandler.postDelayed(pendingLongPressRunnable!!, 150L)
+          }
           key == "lang" -> {
             pendingLongPressRunnable = Runnable {
               touchConsumed = true
@@ -861,73 +2369,152 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
               panelMode = PanelMode.LANGUAGES
               refreshKeyboard()
             }
-            repeatHandler.postDelayed(pendingLongPressRunnable!!, 280L)
+            repeatHandler.postDelayed(pendingLongPressRunnable!!, 300L)
           }
           key == "shift" -> {
             pendingLongPressRunnable = Runnable {
               touchConsumed = true
               longPressTriggered = true
               shiftState = ShiftState.CAPS_LOCK
-              refreshKeyboard()
+              updateKeyLabelsForShift()
             }
-            repeatHandler.postDelayed(pendingLongPressRunnable!!, 350L)
+            repeatHandler.postDelayed(pendingLongPressRunnable!!, 300L)
           }
           alternates.isNotEmpty() -> {
-            touchConsumed = true
             pendingLongPressRunnable = Runnable {
               longPressTriggered = true
-              if (hapticsEnabled) triggerVibration()
+              touchConsumed = true
+              if (hapticsEnabled) triggerVibration(view)
               showAlternatesPopup(view, alternates)
             }
-            repeatHandler.postDelayed(pendingLongPressRunnable!!, 200L)
+            repeatHandler.postDelayed(pendingLongPressRunnable!!, 260L)
           }
           else -> {
-            if (panelMode == PanelMode.KEYS || panelMode == PanelMode.DIACRITICS || panelMode == PanelMode.ALTERNATES) {
-              touchConsumed = true
-              handleKey(key)
-            } else {
-              touchConsumed = false
-            }
+            touchConsumed = false
           }
         }
         return true
       }
       MotionEvent.ACTION_MOVE -> {
+        if (key == "space") {
+            val dx = event.rawX - spaceSwipeStartX
+            if (Math.abs(dx) > dp(20)) {
+                isSpaceSwiping = true
+                touchConsumed = true
+                val cursorMovement = (dx / dp(15)).toInt()
+                if (cursorMovement != 0) {
+                    val ic = currentInputConnection
+                    if (ic != null) {
+                        val currentSelection = ic.getExtractedText(android.view.inputmethod.ExtractedTextRequest(), 0)?.selectionStart ?: 0
+                        val newPos = Math.max(0, currentSelection + cursorMovement)
+                        ic.setSelection(newPos, newPos)
+                    }
+                    spaceSwipeStartX = event.rawX
+                    if (hapticsEnabled) triggerVibration(view)
+                }
+            }
+            if (isSpaceSwiping) return true
+        }
+
+        // --- Swipe detection & tracing (English only, requires deliberate drag) ---
+        if (layoutMode == LayoutMode.EN && swipePath.isNotEmpty() && panelMode == PanelMode.KEYS) {
+            val rawX = event.rawX
+            val rawY = event.rawY
+            val dx = rawX - swipePath.first().x
+            val dy = rawY - swipePath.first().y
+            val totalDistance = Math.sqrt((dx * dx + dy * dy).toDouble()).toFloat()
+
+            if (totalDistance > dp(45) && !isSwipeActive) {
+                ensureKeyHitBoxes()
+                isSwipeActive = true
+                cancelPendingLongPress()
+                touchConsumed = true
+                dismissAlternatePopup()
+            }
+
+            if (isSwipeActive) {
+                swipePath.add(SwipePoint(rawX, rawY, System.currentTimeMillis()))
+                swipeTrailView?.updateTrail(swipePath)
+
+                val hitKey = findKeyAtPosition(rawX, rawY)
+                if (hitKey != null && hitKey != lastSwipeKey) {
+                    lastSwipeKey = hitKey
+                    swipeKeySequence.add(hitKey)
+                    if (hapticsEnabled) triggerVibration(view)
+                }
+                return true
+            }
+        }
+        // ---------------------------------
+
         if (alternatePopup?.isShowing == true && slideAlternateButtons.isNotEmpty()) {
           val rawX = event.rawX
           val rawY = event.rawY
+          var bestIdx = -1
+          var bestDist = Float.MAX_VALUE
           val loc = IntArray(2)
-          var matched = false
           for (idx in slideAlternateButtons.indices) {
             val btn = slideAlternateButtons[idx]
             btn.getLocationOnScreen(loc)
-            val left = loc[0].toFloat() - dp(4)
-            val right = left + btn.width + dp(8)
-            val top = loc[1].toFloat() - dp(8)
-            val bottom = top + btn.height + dp(16)
-            if (rawX in left..right && rawY in top..bottom) {
-              matched = true
-              if (slideHighlightedIndex != idx) {
-                slideHighlightedIndex = idx
-                val c = themeColors()
-                slideAlternateButtons.forEachIndexed { i, b ->
-                  b.background = keyBackground(c, i == idx)
-                  b.alpha = if (i == idx) 1f else 0.55f
-                }
-              }
-              break
+            val btnCenterX = loc[0] + btn.width / 2f
+            val btnCenterY = loc[1] + btn.height / 2f
+            val dx = rawX - btnCenterX
+            val dy = rawY - btnCenterY
+            val dist = if (slideAlternateButtons.size > 8) (dx * dx + dy * dy * 1.5f) else Math.abs(dx)
+            if (dist < bestDist) {
+              bestDist = dist
+              bestIdx = idx
             }
           }
-          if (!matched) {
-            slideHighlightedIndex = -1
+          if (bestIdx >= 0 && slideHighlightedIndex != bestIdx) {
+            slideHighlightedIndex = bestIdx
+            if (hapticsEnabled) triggerVibration(view)
             val c = themeColors()
-            slideAlternateButtons.forEach { b -> b.background = keyBackground(c, false); b.alpha = 1f }
+            slideAlternateButtons.forEachIndexed { i, b ->
+              b.background = keyBackground(c, i == bestIdx)
+              b.alpha = if (i == bestIdx) 1f else 0.55f
+            }
           }
         }
         return true
       }
       MotionEvent.ACTION_UP -> {
+        dismissKeyPreview()
         view.isPressed = false
+
+        if (key == "space" && isSpaceSwiping) {
+            isSpaceSwiping = false
+            return true
+        }
+
+        // --- Swipe recognition (English only) ---
+        if (layoutMode == LayoutMode.EN && isSwipeActive && swipeKeySequence.size >= 2) {
+            val recognizedWord = recognizeSwipeWord(swipeKeySequence)
+            if (recognizedWord != null) {
+                if (typedBuffer.isNotEmpty()) {
+                    currentInputConnection?.deleteSurroundingText(typedBuffer.length, 0)
+                }
+                currentInputConnection?.commitText("$recognizedWord ", 1)
+                typedBuffer = ""
+                if (shiftState == ShiftState.SHIFTED) {
+                    shiftState = ShiftState.OFF
+                    updateKeyLabelsForShift()
+                }
+                updateSuggestionStrip()
+            }
+            swipePath.clear()
+            swipeKeySequence.clear()
+            swipeTrailView?.clearTrail()
+            isSwipeActive = false
+            lastSwipeKey = ""
+            cancelPendingLongPress()
+            return true
+        }
+        isSwipeActive = false
+        swipePath.clear()
+        swipeTrailView?.clearTrail()
+        // -------------------------
+
         cancelPendingLongPress()
         if (alternatePopup?.isShowing == true) {
           val idx = if (slideHighlightedIndex >= 0) slideHighlightedIndex else 0
@@ -937,16 +2524,31 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
           }
           dismissAlternatePopup()
           slideHighlightedIndex = -1
-        } else if (!touchConsumed) {
-          handleKey(key)
-        } else if (alternatesForKey(key).isNotEmpty() && !longPressTriggered) {
-          handleKey(key)
+        } else if (!longPressTriggered) {
+            val currentTime = System.currentTimeMillis()
+            if (isEmojiSearchMode && (key.length == 1 || key == "space")) {
+                emojiSearchBuffer += if (key == "space") " " else key
+                refreshKeyboard()
+            } else if (isEmojiSearchMode && (key == "delete" || key == "back")) {
+                if (emojiSearchBuffer.isNotEmpty()) {
+                    emojiSearchBuffer = emojiSearchBuffer.dropLast(1)
+                    if (emojiSearchBuffer.isEmpty()) isEmojiSearchMode = false
+                    refreshKeyboard()
+                } else {
+                    isEmojiSearchMode = false
+                    refreshKeyboard()
+                }
+            } else {
+                handleKey(key)
+            }
+            lastTapTime = currentTime
         }
         touchConsumed = false
         longPressTriggered = false
         return true
       }
       MotionEvent.ACTION_CANCEL -> {
+        dismissKeyPreview()
         view.isPressed = false
         cancelPendingLongPress()
         touchConsumed = false
@@ -955,6 +2557,93 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       }
     }
     return true
+  }
+
+  private fun findKeyAtPosition(rawX: Float, rawY: Float): String? {
+      for ((key, rect) in keyHitBoxes) {
+          if (key.length == 1 && key[0].isLetter() && rect.contains(rawX, rawY)) {
+              return key
+          }
+      }
+      var closest: String? = null
+      var minDist = Float.MAX_VALUE
+      val tolerance = dp(12).toFloat()
+      for ((key, rect) in keyHitBoxes) {
+          if (key.length != 1 || !key[0].isLetter()) continue
+          val cx = rect.centerX()
+          val cy = rect.centerY()
+          val dist = Math.sqrt(((rawX - cx) * (rawX - cx) + (rawY - cy) * (rawY - cy)).toDouble()).toFloat()
+          if (dist < minDist && dist < tolerance + rect.width() / 2) {
+              minDist = dist
+              closest = key
+          }
+      }
+      return closest
+  }
+
+  private fun recognizeSwipeWord(keySequence: List<String>): String? {
+      if (keySequence.size < 2) return null
+      val path = keySequence.joinToString("").lowercase()
+      val firstKey = keySequence.first().lowercase()
+      val lastKey = keySequence.last().lowercase()
+
+      val candidates = (dictionaryForLayout() + swipeDictionary + getPersonalDictionary() + cachedLearnedWords)
+          .filter { word ->
+              val w = word.lowercase()
+              w.length >= 2 &&
+              w.startsWith(firstKey) &&
+              w.endsWith(lastKey) &&
+              w.length in (keySequence.size - 3)..(keySequence.size + 3)
+          }
+
+      if (candidates.isEmpty()) return null
+
+      val scored = candidates.map { word ->
+          word to swipeMatchScore(word.lowercase(), keySequence.map { it.lowercase() })
+      }.filter { it.second < Int.MAX_VALUE }
+       .sortedBy { it.second }
+
+      val best = scored.firstOrNull() ?: return null
+      
+      lastSwipeAlternatives = scored.map { it.first }
+
+      return if (shiftState != ShiftState.OFF) {
+          best.first.replaceFirstChar { it.uppercase() }
+      } else {
+          best.first
+      }
+  }
+
+  private fun swipeMatchScore(word: String, swipedKeys: List<String>): Int {
+      // Advanced Probabilistic Scoring (ML-Simulated Gesture Decoder)
+      val m = word.length
+      val n = swipedKeys.size
+      if (m == 0 || n == 0) return Int.MAX_VALUE
+
+      val dp = Array(m + 1) { IntArray(n + 1) }
+
+      for (i in 0..m) dp[i][0] = i * 10 // Penalty for missing a required letter
+      for (j in 0..n) dp[0][j] = j * 2  // Small penalty for sliding over extra keys
+
+      for (i in 1..m) {
+          for (j in 1..n) {
+              val isMatch = word[i - 1].toString() == swipedKeys[j - 1]
+              val cost = if (isMatch) 0 else 5
+              
+              dp[i][j] = minOf(
+                  dp[i - 1][j] + 10,        // Deletion (missed a letter in word)
+                  dp[i][j - 1] + 2,         // Insertion (slid over an extra key)
+                  dp[i - 1][j - 1] + cost   // Match or Substitution
+              )
+          }
+      }
+      
+      // Bonus: if start and end keys match exactly, reduce the score
+      var finalScore = dp[m][n]
+      if (word.first().toString() == swipedKeys.first()) finalScore -= 5
+      if (word.last().toString() == swipedKeys.last()) finalScore -= 5
+
+      return maxOf(0, finalScore)
   }
 
   private fun keyBackground(colors: ThemeColors, special: Boolean): StateListDrawable {
@@ -966,44 +2655,31 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       return (cached.constantState?.newDrawable()?.mutate() as? StateListDrawable) ?: cached as StateListDrawable
     }
 
-    // Pressed state (flat, no bevel, shifted down visually)
+    // Normal state — clean, soft, luxury rounded rectangle matching Gboard
+    val normalBg = GradientDrawable().apply {
+      shape = GradientDrawable.RECTANGLE
+      cornerRadius = dp(colors.radius).toFloat()
+      setColor(baseColor)
+      setStroke(dp(1), colors.stroke)
+    }
+
+    // Pressed state — responsive subtle accent glow / pressed tone
+    val pressedColor = Color.argb(
+      255,
+      (Color.red(baseColor) * 0.82f + Color.red(colors.accent) * 0.18f).toInt().coerceIn(0, 255),
+      (Color.green(baseColor) * 0.82f + Color.green(colors.accent) * 0.18f).toInt().coerceIn(0, 255),
+      (Color.blue(baseColor) * 0.82f + Color.blue(colors.accent) * 0.18f).toInt().coerceIn(0, 255)
+    )
     val pressedBg = GradientDrawable().apply {
       shape = GradientDrawable.RECTANGLE
       cornerRadius = dp(colors.radius).toFloat()
-      setColor(baseColor)
-      setStroke(dp(1), colors.stroke)
-      alpha = 200 // Slightly darken when pressed
-    }
-    val pressedLayer = LayerDrawable(arrayOf(pressedBg)).apply {
-      setLayerInset(0, dp(2), dp(2), dp(2), dp(2))
-    }
-
-    // Normal state (with 3D bottom bevel)
-    val bevelColor = Color.argb(
-      255,
-      (Color.red(baseColor) * 0.8).toInt(),
-      (Color.green(baseColor) * 0.8).toInt(),
-      (Color.blue(baseColor) * 0.8).toInt()
-    )
-    val shadowBg = GradientDrawable().apply {
-      shape = GradientDrawable.RECTANGLE
-      cornerRadius = dp(colors.radius).toFloat()
-      setColor(bevelColor)
-    }
-    val topBg = GradientDrawable().apply {
-      shape = GradientDrawable.RECTANGLE
-      cornerRadius = dp(colors.radius).toFloat()
-      setColor(baseColor)
-      setStroke(dp(1), colors.stroke)
-    }
-    val normalLayer = LayerDrawable(arrayOf(shadowBg, topBg)).apply {
-      setLayerInset(0, dp(2), dp(2), dp(2), dp(2))
-      setLayerInset(1, dp(2), dp(2), dp(2), dp(6))
+      setColor(pressedColor)
+      setStroke(dp(1), colors.accent)
     }
 
     val stateList = StateListDrawable().apply {
-      addState(intArrayOf(android.R.attr.state_pressed), pressedLayer)
-      addState(intArrayOf(), normalLayer)
+      addState(intArrayOf(android.R.attr.state_pressed), pressedBg)
+      addState(intArrayOf(), normalBg)
     }
     
     drawableCache.put(cacheKey, stateList)
@@ -1027,28 +2703,11 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     return drawable
   }
 
-  private fun updateSuggestionStrip() {
+  private fun applySuggestionsToStrip(suggestionsList: List<String>) {
     try {
-      if (isSearchingClips && typedBuffer.isEmpty()) {
-        suggestionButtons[0].text = "❌ Cancel Search"
-        suggestionButtons[0].tag = "CANCEL_SEARCH"
-        suggestionButtons[0].isEnabled = true
-        suggestionButtons[0].alpha = 1f
-        
-        suggestionButtons[1].text = " "
-        suggestionButtons[1].tag = ""
-        suggestionButtons[1].isEnabled = false
-        suggestionButtons[1].alpha = 0f
-        
-        suggestionButtons[2].text = " "
-        suggestionButtons[2].tag = ""
-        suggestionButtons[2].isEnabled = false
-        suggestionButtons[2].alpha = 0f
-        return
-      }
+      val suggestions = (suggestionsList + listOf("", "", "")).take(3)
 
-      val suggestions = (suggestionsForBuffer() + listOf("", "", "")).take(3)
-      
+      // If no typed buffer and all suggestions blank → hide strip
       if (typedBuffer.isEmpty() && suggestions.all { it.isBlank() }) {
         suggestionButtons.forEach { it.text = " "; it.isEnabled = false; it.alpha = 0f }
         return
@@ -1056,14 +2715,187 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
       suggestionButtons.forEachIndexed { index, button ->
         val suggestion = suggestions.getOrNull(index).orEmpty()
+        val isCenter = index == 1
+        // The center always shows the typed word; enable it even when alternatives are empty
+        val isTypedWord = isCenter && suggestion.isNotBlank()
         button.text = if (suggestion.isBlank()) " " else compactLabel(suggestion, 18)
         button.tag = suggestion
         button.isEnabled = suggestion.isNotBlank()
-        button.alpha = if (suggestion.isBlank()) 0.45f else 1f
+        button.alpha = when {
+          isTypedWord -> 1f          // Center typed word: always fully visible
+          suggestion.isBlank() -> 0.3f
+          else -> 1f
+        }
       }
     } catch (e: Exception) {
-      // Prevent unhandled exception from crashing InputMethodService
       suggestionButtons.forEach { it.text = " "; it.isEnabled = false }
+    }
+  }
+
+  private fun updateSuggestionStrip() {
+    try {
+      if (isSearchingClips && typedBuffer.isEmpty()) {
+        suggestionButtons[0].text = "❌ Cancel Search"
+        suggestionButtons[0].tag = "CANCEL_SEARCH"
+        suggestionButtons[0].isEnabled = true
+        suggestionButtons[0].alpha = 1f
+
+        suggestionButtons[1].text = " "
+        suggestionButtons[1].tag = ""
+        suggestionButtons[1].isEnabled = false
+        suggestionButtons[1].alpha = 0f
+
+        suggestionButtons[2].text = " "
+        suggestionButtons[2].tag = ""
+        suggestionButtons[2].isEnabled = false
+        suggestionButtons[2].alpha = 0f
+        return
+      }
+
+      val buffer = typedBuffer
+      if (buffer.isEmpty()) {
+        suggestionRequestId++
+        pendingSuggestionRunnable?.let { mainHandler.removeCallbacks(it) }
+        currentQuickSuggestions = emptyList()
+
+        val ic = currentInputConnection
+        val textBefore = ic?.getTextBeforeCursor(200, 0)?.toString() ?: ""
+        val contextNextWords = com.clipvault.mobile.keyboard.SentenceContextEngine.predictNextWords(textBefore, 3)
+
+        val latestClip = cachedRecentClips.firstOrNull()?.trim()
+        val showClip = !latestClip.isNullOrBlank() && !isIncognitoMode && (textBefore.isBlank() || textBefore.endsWith("\n"))
+
+        val smartReplies = if (showClip && latestClip != null) com.clipvault.mobile.keyboard.SmartReplyEngine.generateReplies(latestClip) else null
+        if (smartReplies != null) {
+          // AI Smart Reply Chips for incoming messages
+          val replies = smartReplies.toList()
+          for (i in 0..2) {
+            val reply = replies[i]
+            suggestionButtons[i].text = "💬 " + compactLabel(reply, 14)
+            suggestionButtons[i].tag = "SMART_REPLY:$reply"
+            suggestionButtons[i].isEnabled = true
+            suggestionButtons[i].alpha = 1f
+          }
+        } else if (showClip) {
+          // Gboard-style clipboard chip on fresh line or empty text
+          suggestionButtons[0].text = "📋 " + compactLabel(latestClip!!, 16)
+          suggestionButtons[0].tag = "PASTE_CLIP:$latestClip"
+          suggestionButtons[0].isEnabled = true
+          suggestionButtons[0].alpha = 1f
+
+          // If next words exist, use slots 1 & 2 for contextual predictions
+          if (contextNextWords.isNotEmpty()) {
+            val w1 = contextNextWords.getOrNull(0) ?: ""
+            suggestionButtons[1].text = compactLabel(w1, 14)
+            suggestionButtons[1].tag = w1
+            suggestionButtons[1].isEnabled = w1.isNotBlank()
+            suggestionButtons[1].alpha = if (w1.isNotBlank()) 0.85f else 0f
+
+            val w2 = contextNextWords.getOrNull(1) ?: ""
+            suggestionButtons[2].text = compactLabel(w2, 14)
+            suggestionButtons[2].tag = w2
+            suggestionButtons[2].isEnabled = w2.isNotBlank()
+            suggestionButtons[2].alpha = if (w2.isNotBlank()) 0.85f else 0f
+          } else {
+            suggestionButtons[1].text = " "
+            suggestionButtons[1].tag = ""
+            suggestionButtons[1].isEnabled = false
+            suggestionButtons[1].alpha = 0f
+
+            suggestionButtons[2].text = " "
+            suggestionButtons[2].tag = ""
+            suggestionButtons[2].isEnabled = false
+            suggestionButtons[2].alpha = 0f
+          }
+        } else if (contextNextWords.isNotEmpty()) {
+          // Gboard-level Context-Aware Next-Word Predictions
+          val list = if (contextNextWords.size < 3) {
+            val fillers = if (layoutMode == LayoutMode.UR || layoutMode == LayoutMode.AR) {
+              listOf("کیا", "ہے", "نہیں", "اور", "میں", "آپ", "کا", "کی", "کو", "سب")
+            } else {
+              listOf("the", "to", "you", "and", "is", "in", "it", "for")
+            }
+            (contextNextWords + fillers.filter { !contextNextWords.contains(it) }).take(3)
+          } else {
+            contextNextWords.take(3)
+          }
+          applySuggestionsToStrip(list)
+        } else {
+          val fillers = if (layoutMode == LayoutMode.UR || layoutMode == LayoutMode.AR) {
+            listOf("السلام علیکم", "کیا", "آپ")
+          } else {
+            listOf("I", "How", "Thank")
+          }
+          applySuggestionsToStrip(fillers)
+        }
+        return
+      }
+
+      val reqId = ++suggestionRequestId
+      pendingSuggestionRunnable?.let { mainHandler.removeCallbacks(it) }
+
+      // ── Immediate preview: typed word in center, prefix completions on sides ──
+      val ch = buffer[0].lowercaseChar()
+      val baseBucket = indexedBaseDictionary(layoutMode)[ch] ?: emptyList()
+      val pool = cachedLearnedWords + cachedPersonalDictionary + baseBucket
+      val quickAlternatives = mutableListOf<String>()
+      for (w in pool) {
+        if (w.startsWith(buffer, ignoreCase = true) && !w.equals(buffer, ignoreCase = true) && !quickAlternatives.contains(w)) {
+          quickAlternatives.add(w)
+          if (quickAlternatives.size >= 2) break
+        }
+      }
+
+      // Center = user's own word, left/right = alternatives
+      val immediateStrip = buildSuggestionStrip(buffer, quickAlternatives)
+      currentQuickSuggestions = immediateStrip
+      applySuggestionsToStrip(immediateStrip)
+
+      // ── Async deep evaluation (25ms debounce) ─────────────────────────────────
+      val task = Runnable {
+        backgroundExecutor.execute {
+          if (reqId != suggestionRequestId) return@execute
+          val deep = computeDeepSuggestions(buffer)
+          if (reqId != suggestionRequestId) return@execute
+          mainHandler.post {
+            if (reqId == suggestionRequestId) {
+              val alts = deep.filter { !it.equals(buffer, ignoreCase = true) }
+              val deepStrip = if (alts.isNotEmpty()) {
+                listOf(alts.getOrNull(0) ?: "", buffer, alts.getOrNull(1) ?: (alts.getOrNull(2) ?: ""))
+              } else {
+                buildSuggestionStrip(buffer, emptyList())
+              }
+              currentQuickSuggestions = deepStrip
+              applySuggestionsToStrip(deepStrip)
+            }
+          }
+        }
+      }
+      pendingSuggestionRunnable = task
+      mainHandler.postDelayed(task, 25L)
+    } catch (e: Exception) {
+      suggestionButtons.forEach { it.text = " "; it.isEnabled = false }
+    }
+  }
+
+  /**
+   * Builds a 3-slot suggestion list: left alternative, center typed word, right alternative.
+   */
+  private fun buildSuggestionStrip(typed: String, alternatives: List<String>): List<String> {
+    val left = alternatives.getOrNull(0) ?: ""
+    val right = alternatives.getOrNull(1) ?: ""
+    return listOf(left, typed, right)
+  }
+
+  private fun updateKeyLabelsForShift() {
+    if (layoutMode != LayoutMode.EN) return
+    val isUpper = shiftState != ShiftState.OFF
+    for ((key, view) in keyButtons) {
+      if (key.length == 1 && key[0].isLetter() && view is Button) {
+        view.text = if (isUpper) key.uppercase() else key.lowercase()
+      } else if (key == "shift" && view is Button) {
+        view.text = labelFor("shift")
+      }
     }
   }
 
@@ -1090,30 +2922,31 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       "lang" -> "\uD83C\uDF10"
       "theme" -> "\u25C9"
       "mic" -> "\uD83C\uDF99\uFE0F"  // 🎙️ always — red blink animation signals active state
-      "next_keyboard" -> "\u2328"
+      "next_keyboard", "switch_system" -> "\u2328"
       "urdu_qmark" -> "\u061F"  // Urdu question mark ؟
-      "switch_system" -> "\u2328 System"
       "clips" -> "\uD83D\uDCCB"
+      "gifs" -> "GIF"
+      "stickers" -> "\uD83D\uDE00" // Smiley face as sticker icon
       "emoji", "emoji_comma" -> "\u263A"
       "emoji_prev" -> "\u2039"
       "emoji_next" -> "\u203A"
       "emoji_page" -> "${emojiPageIndex + 1}/${emojiPages().size}"
       "keys" -> "ABC"
       "languages" -> "\u22EE"
-      "marks" -> "\u0621\u064B"
+      "marks" -> "اعراب"
       "," -> ","
       "urdu_comma" -> "\u060C"
       "urdu_period" -> "\u06D4"
       "symbols" -> "123"
       "sym_prev" -> "\u25C4 Prev"
       "sym_next" -> "Next \u25BA"
-      "sym_cycle" -> "${symbolPageIndex + 1}/${symbolPages().size}\u21C4"  // e.g. "1/2 ⇄"
+      "sym_cycle" -> "<>"
       "abc" -> when (lastTextLayoutMode) {
         LayoutMode.UR -> "\u0627\u0631\u062F\u0648"
         LayoutMode.AR -> "\u0639\u0631\u0628\u064A"
         else -> "ABC"
       }
-      "dialpad_toggle" -> if (isDialpadMode) "Sym" else "123"
+      "dialpad_toggle" -> if (isDialpadMode) "Sym" else "\uD83D\uDD22"
       "zabar" -> "\u25CC\u064E"
       "zer" -> "\u25CC\u0650"
       "pesh" -> "\u25CC\u064F"
@@ -1143,6 +2976,21 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       "keysize_plus" -> "Aa+"
       "haptics_toggle" -> if (hapticsEnabled) "Vib On" else "Vib Off"
       "ai_rewrite" -> "✨ AI Rewrite"
+      "text_edit" -> "✂️"
+      "incognito" -> if (isIncognitoMode) "🕶️" else "👓"
+      "select_all" -> "Select All"
+      "cut" -> "✂️ Cut"
+      "copy" -> "⎘ Copy"
+      "paste" -> "📋 Paste"
+      "undo" -> "↩️ Undo"
+      "redo" -> "↪️ Redo"
+      "home" -> "↖ Home"
+      "end" -> "↘ End"
+      "settings" -> "⚙️"
+      "toggle_autocorrect" -> if (autoCorrectEnabled) "💡 Auto-Correct: ON" else "💡 Auto-Correct: OFF"
+      "toggle_doublespace" -> if (doubleSpacePeriodEnabled) "␣ Double-Space: ON" else "␣ Double-Space: OFF"
+      "toggle_system_theme" -> if (systemThemeAutoFollow) "🌓 Auto Theme: ON" else "🌓 Auto Theme: OFF"
+      "toggle_offline_voice" -> if (com.clipvault.mobile.keyboard.OfflineSpeechEngine.isOfflinePreferred(this)) "🎙️ Offline: ON" else "☁️ Cloud: ON"
       else -> {
         val topRowUR = listOf("\u0636", "\u0635", "\u063A", "\u0691", "\u0679", "\u062B", "\u062D", "\u0626", "\u0638", "\u0637")
         val topRowAR = listOf("\u0636", "\u0635", "\u062B", "\u0642", "\u0641", "\u063A", "\u0639", "\u0647", "\u062E", "\u062C")
@@ -1167,10 +3015,12 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   private fun isControlKey(key: String): Boolean {
     return key in setOf(
       "shift", "back", "enter", "lang", "theme", "mic", "next_keyboard", "switch_system",
-      "symbols", "abc", "clips", "emoji", "emoji_comma", "emoji_prev", "emoji_next",
+      "symbols", "abc", "clips", "gifs", "stickers", "emoji", "emoji_comma", "emoji_prev", "emoji_next",
       "emoji_page", "keys", "languages", "marks", "space", ",", ".", "urdu_comma",
       "urdu_period", "urdu_qmark", "sym_prev", "sym_next", "sym_cycle", "!", "dialpad_toggle",
-      "height_minus", "height_plus", "keysize_minus", "keysize_plus", "haptics_toggle", "ai_rewrite"
+      "height_minus", "height_plus", "keysize_minus", "keysize_plus", "haptics_toggle", "ai_rewrite",
+      "text_edit", "incognito", "select_all", "cut", "copy", "paste", "undo", "redo", "home", "end",
+      "settings", "toggle_autocorrect", "toggle_doublespace", "toggle_system_theme", "toggle_offline_voice"
     ) || diacriticValues.containsKey(key) ||
       key.startsWith("theme_") ||
       key.startsWith("lang_") ||
@@ -1192,20 +3042,24 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
         }
       }
       return when (key) {
-        "space" -> 3.2f
-        "enter" -> 1.5f
-        "abc", "dialpad_toggle" -> 1.2f
+        "space" -> 4.0f
+        "enter" -> 1.45f
+        "abc" -> 1.35f
+        "dialpad_toggle" -> 1.2f
+        ",", "." -> 1.0f
+        "sym_cycle" -> 1.2f
         else -> 1f
       }
     }
     return when (key) {
-      "space" -> 3.2f
-      "enter" -> 1.5f
+      "space" -> 4.0f
+      "enter" -> 1.45f
       "shift", "back", "symbols", "abc" -> 1.35f
-      "emoji_comma", "lang", "marks" -> 1.2f
+      "emoji_comma", "lang", "marks", "settings" -> 1.2f
       ",", ".", "urdu_comma", "urdu_period" -> 1.0f
       "emoji_prev", "emoji_next", "emoji_page", "keys" -> 1.25f
       "ai_rewrite" -> 2f
+      "toggle_autocorrect", "toggle_doublespace", "toggle_system_theme", "toggle_offline_voice" -> 2.5f
       "theme_CLASSIC_DARK", "theme_SOFT_IVORY", "theme_NEON_GLASS", "theme_MIDNIGHT_GOLD", "theme_GRAPHITE",
       "theme_OCEAN_BLUE", "theme_FOREST_GREEN", "theme_ROYAL_PURPLE", "theme_SUNSET_ORANGE", "theme_ROSE_PETAL" -> 2f
       "height_minus", "height_plus", "keysize_minus", "keysize_plus" -> 1.4f
@@ -1226,16 +3080,18 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   private fun textSizeFor(key: String, label: String): Float {
     return when {
       panelMode == PanelMode.EMOJI && !isControlKey(key) -> 23f
+      key.startsWith("toggle_") -> 13f
       key == "space" -> 18f
       key in setOf(",", ".", "urdu_comma", "urdu_period") -> 22f
-      key in setOf("theme", "mic", "next_keyboard", "clips", "emoji", "emoji_comma", "enter", "marks", "lang", "languages", "ai_rewrite") -> 22f
-      key in setOf("symbols", "abc", "shift", "back", "sym_cycle", "dialpad_toggle") -> 18f
+      key in setOf("theme", "mic", "next_keyboard", "switch_system", "clips", "emoji", "emoji_comma", "enter", "marks", "lang", "languages", "ai_rewrite", "settings") -> 22f
+      key in setOf("symbols", "abc", "shift", "back", "sym_cycle", "dialpad_toggle") -> 16f
       key.startsWith("theme_") -> 13f
       key in setOf("height_minus", "height_plus", "keysize_minus", "keysize_plus", "haptics_toggle") -> 14f
       key.startsWith("lang_") || key.startsWith("download_") || key.startsWith("remove_") || key == "add_more_languages" || key == "switch_system" -> 14f
       diacriticValues.containsKey(key) -> 24f
       key in setOf("emoji_prev", "emoji_next") -> 23f
       key == "emoji_page" || key == "keys" -> 14f
+      layoutMode == LayoutMode.SYMBOLS && key.length == 1 -> 20f
       label.length > 4 -> 16f
       layoutMode == LayoutMode.EN -> 26f
       else -> 27f
@@ -1296,6 +3152,39 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     }
 
     when (key) {
+      "settings" -> {
+        panelMode = if (panelMode == PanelMode.SETTINGS) PanelMode.KEYS else PanelMode.SETTINGS
+        refreshKeyboard()
+        return
+      }
+      "toggle_autocorrect" -> {
+        autoCorrectEnabled = !autoCorrectEnabled
+        saveKeyboardPrefs()
+        updateStatus(if (autoCorrectEnabled) "💡 Auto-Correct: ON" else "💡 Auto-Correct: OFF")
+        refreshKeyboard()
+        return
+      }
+      "toggle_doublespace" -> {
+        doubleSpacePeriodEnabled = !doubleSpacePeriodEnabled
+        saveKeyboardPrefs()
+        updateStatus(if (doubleSpacePeriodEnabled) "␣ Double-Space: ON" else "␣ Double-Space: OFF")
+        refreshKeyboard()
+        return
+      }
+      "toggle_system_theme" -> {
+        systemThemeAutoFollow = !systemThemeAutoFollow
+        saveKeyboardPrefs()
+        updateStatus(if (systemThemeAutoFollow) "🌓 Auto Theme: ON" else "🌓 Auto Theme: OFF")
+        refreshKeyboard()
+        return
+      }
+      "toggle_offline_voice" -> {
+        val current = com.clipvault.mobile.keyboard.OfflineSpeechEngine.isOfflinePreferred(this)
+        com.clipvault.mobile.keyboard.OfflineSpeechEngine.setOfflinePreferred(this, !current)
+        updateStatus(if (!current) "🎙️ Offline Voice ON" else "☁️ Cloud Voice ON")
+        refreshKeyboard()
+        return
+      }
       "height_minus" -> { adjustKeyboardHeight(-0.08f); return }
       "height_plus" -> { adjustKeyboardHeight(0.08f); return }
       "keysize_minus" -> { adjustKeyTextScale(-0.06f); return }
@@ -1305,6 +3194,56 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
         panelMode = PanelMode.KEYS
         refreshKeyboard()
         aiRewrite()
+        return
+      }
+      "text_edit" -> {
+        panelMode = if (panelMode == PanelMode.TEXT_EDIT) PanelMode.KEYS else PanelMode.TEXT_EDIT
+        refreshKeyboard()
+        return
+      }
+      "incognito" -> {
+        isIncognitoMode = !isIncognitoMode
+        updateStatus(if (isIncognitoMode) "🕶️ Incognito ON" else "👓 Incognito OFF")
+        refreshKeyboard()
+        return
+      }
+      "select_all" -> {
+        currentInputConnection?.performContextMenuAction(android.R.id.selectAll)
+        updateStatus("✓ Selected All")
+        return
+      }
+      "cut" -> {
+        currentInputConnection?.performContextMenuAction(android.R.id.cut)
+        updateStatus("✓ Cut")
+        return
+      }
+      "copy" -> {
+        currentInputConnection?.performContextMenuAction(android.R.id.copy)
+        updateStatus("✓ Copied")
+        return
+      }
+      "paste" -> {
+        currentInputConnection?.performContextMenuAction(android.R.id.paste)
+        updateStatus("✓ Pasted")
+        return
+      }
+      "undo" -> {
+        currentInputConnection?.performContextMenuAction(android.R.id.undo)
+        updateStatus("✓ Undo")
+        return
+      }
+      "redo" -> {
+        currentInputConnection?.performContextMenuAction(android.R.id.redo)
+        updateStatus("✓ Redo")
+        return
+      }
+      "home" -> {
+        currentInputConnection?.setSelection(0, 0)
+        return
+      }
+      "end" -> {
+        val len = currentInputConnection?.getTextBeforeCursor(10000, 0)?.length ?: 0
+        currentInputConnection?.setSelection(len, len)
         return
       }
     }
@@ -1332,12 +3271,19 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
     when (key) {
       "shift" -> {
-        shiftState = when (shiftState) {
-          ShiftState.OFF -> ShiftState.SHIFTED
-          ShiftState.SHIFTED -> ShiftState.OFF
-          ShiftState.CAPS_LOCK -> ShiftState.OFF
+        val now = System.currentTimeMillis()
+        val isDoubleTap = (now - lastShiftTapTime) < 400L && shiftState == ShiftState.SHIFTED
+        shiftState = when {
+          isDoubleTap -> {
+            updateStatus("🔒 CAPS LOCK")
+            ShiftState.CAPS_LOCK
+          }
+          shiftState == ShiftState.OFF -> ShiftState.SHIFTED
+          shiftState == ShiftState.SHIFTED -> ShiftState.OFF
+          else -> ShiftState.OFF  // CAPS_LOCK -> OFF
         }
-        refreshKeyboard()
+        lastShiftTapTime = now
+        updateKeyLabelsForShift()
       }
       "lang" -> cycleEnabledLanguage()
       "dialpad_toggle" -> {
@@ -1361,8 +3307,15 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
         alternateKeys = emptyList()
         refreshKeyboard()
       }
-      "emoji", "emoji_comma" -> {
-        panelMode = if (panelMode == PanelMode.EMOJI) PanelMode.KEYS else PanelMode.EMOJI
+      "stickers" -> {
+        panelMode = if (panelMode == PanelMode.EMOJI && isEmojiKitchenMode) PanelMode.KEYS else PanelMode.EMOJI
+        isEmojiKitchenMode = (panelMode == PanelMode.EMOJI)
+        alternateKeys = emptyList()
+        refreshKeyboard()
+      }
+      "emoji", "emoji_comma", "gifs" -> {
+        panelMode = if (panelMode == PanelMode.EMOJI && !isEmojiKitchenMode) PanelMode.KEYS else PanelMode.EMOJI
+        if (panelMode == PanelMode.EMOJI) isEmojiKitchenMode = false
         alternateKeys = emptyList()
         refreshKeyboard()
       }
@@ -1449,61 +3402,19 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
     updateStatus("⏳ AI Rewriting...")
 
-    Thread {
-      val keys = listOf(
-        "AIzaSyCOwePzEnkjw_WMi0lcNPKGtyZ0ZvF0gW4",
-        "AIzaSyBM8j_ECs_FJU5RWE79V_mpy6AmAJHnamI",
-        "AIzaSyAVYWaqcTFB7MtqfH_WoWrWvqK9oJw8uBQ"
-      )
-
-      val payload = JSONObject()
-      val contents = JSONArray()
-      val content = JSONObject()
-      val parts = JSONArray()
-      val part = JSONObject()
-      part.put("text", "Rewrite this text to be professional and grammatically correct. Output ONLY the rewritten text, without quotes or conversational filler:\n\n$textToRewrite")
-      parts.put(part)
-      content.put("parts", parts)
-      contents.put(content)
-      payload.put("contents", contents)
-
-      var result: String? = null
-      for (key in keys) {
-        try {
-          val url = java.net.URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$key")
-          val conn = url.openConnection() as java.net.HttpURLConnection
-          conn.requestMethod = "POST"
-          conn.setRequestProperty("Content-Type", "application/json")
-          conn.doOutput = true
-          conn.outputStream.use { it.write(payload.toString().toByteArray()) }
-
-          if (conn.responseCode == 200) {
-            val response = conn.inputStream.bufferedReader().use { it.readText() }
-            val json = JSONObject(response)
-            val rewritten = json.getJSONArray("candidates").getJSONObject(0)
-                .getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
-            result = rewritten.trim()
-            break
-          }
-        } catch (e: Exception) {
-          // Fallback
-        }
-      }
-
-      Handler(Looper.getMainLooper()).post {
-        if (result != null) {
-          if (isSelected) {
-            currentInputConnection?.commitText(result, 1)
-          } else {
-            currentInputConnection?.deleteSurroundingText(textToRewrite!!.length, 0)
-            currentInputConnection?.commitText(result, 1)
-          }
-          updateStatus("✨ AI Rewritten")
+    com.clipvault.mobile.keyboard.GeminiAiHelper.rewriteText(textToRewrite) { result ->
+      if (result != null) {
+        if (isSelected) {
+          currentInputConnection?.commitText(result, 1)
         } else {
-          updateStatus("❌ AI Failed")
+          currentInputConnection?.deleteSurroundingText(textToRewrite!!.length, 0)
+          currentInputConnection?.commitText(result, 1)
         }
+        updateStatus("✨ AI Rewritten")
+      } else {
+        updateStatus("❌ AI Failed")
       }
-    }.start()
+    }
   }
 
   private fun selectLanguage(code: String) {
@@ -1596,7 +3507,34 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
     when (key) {
       "back" -> deleteOneCharacter()
-      "space" -> commitSpaceWithAutoCorrect()
+      "space" -> {
+        val now = System.currentTimeMillis()
+        val isDoubleSpace = doubleSpacePeriodEnabled
+            && typedBuffer.isEmpty()
+            && (now - lastSpaceTapTime) < 500L
+            && (now - lastSpaceTapTime) > 80L // debounce accidental double-tap
+        if (isDoubleSpace) {
+          // Double-space → replace trailing space with ". " and auto-shift
+          val textBefore = connection.getTextBeforeCursor(1, 0)?.toString() ?: ""
+          if (textBefore == " ") {
+            connection.deleteSurroundingText(1, 0)
+            val period = if (layoutMode == LayoutMode.UR || layoutMode == LayoutMode.AR) "۔ " else ". "
+            connection.commitText(period, 1)
+            // Auto-shift next letter
+            if (shiftState == ShiftState.OFF) {
+              shiftState = ShiftState.SHIFTED
+              updateKeyLabelsForShift()
+            }
+            lastSpaceTapTime = 0L // reset so triple-space doesn't loop
+          } else {
+            commitSpaceWithAutoCorrect()
+            lastSpaceTapTime = now
+          }
+        } else {
+          commitSpaceWithAutoCorrect()
+          lastSpaceTapTime = now
+        }
+      }
       "enter" -> {
         val action = currentInputEditorInfo?.imeOptions?.and(android.view.inputmethod.EditorInfo.IME_MASK_ACTION)
         if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH || action == android.view.inputmethod.EditorInfo.IME_ACTION_GO) {
@@ -1644,7 +3582,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       
       if (shiftState == ShiftState.SHIFTED && value.length == 1 && value[0].isLetter()) {
         shiftState = ShiftState.OFF
-        refreshKeyboard()
+        updateKeyLabelsForShift()
       }
       updateSuggestionStrip()
     } catch (e: Exception) {
@@ -1655,30 +3593,56 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   private fun commitSpaceWithAutoCorrect() {
     val connection = currentInputConnection ?: return
 
-    val learnedWords = NativeClipStore.getLearnedWords(this)
     val typed = typedBuffer.trim()
-    // Do not autocorrect if the word is already learned or in personal dict
-    val shouldAutocorrect = typed.isNotBlank() && !learnedWords.contains(typed) && !getPersonalDictionary().contains(typed)
 
-    val topSuggestion = if (shouldAutocorrect) {
-       nativeSuggestions.firstOrNull() ?: suggestionsForBuffer().firstOrNull()
-    } else {
-       typed
-    }
+    // ── Safe-autocorrect guard ─────────────────────────────────────────────────
+    // Only apply autocorrect from the KNOWN common-corrections map (e.g. "teh"→"the").
+    // We deliberately do NOT apply fuzzy/prefix/native-spellcheck suggestions on space,
+    // because those produce false positives (e.g. replacing a valid Urdu word with an
+    // unrelated English word) and destroy the user's intended text silently.
+    val safeCorrection: String? = if (autoCorrectEnabled
+        && typed.isNotBlank()
+        && typed.length >= 3
+        && !cachedLearnedWords.contains(typed)
+        && !cachedPersonalDictionary.contains(typed)) {
 
-    if (typed.isNotBlank() && topSuggestion != null && topSuggestion.isNotBlank() && topSuggestion != typed) {
-      val diff = typed.length
-      connection.deleteSurroundingText(diff, 0)
-      connection.commitText(topSuggestion, 1)
+      val normalised = typed.lowercase()
+      val candidate = commonCorrectionFor(normalised)
+      // Only apply if candidate exists, is not identical, and was not previously rejected
+      if (candidate != null && "$typed\u00B6$candidate" !in rejectedCorrections && !candidate.equals(typed, ignoreCase = true)) candidate else null
+    } else null
+
+    if (safeCorrection != null) {
+      // Replace typed word with the safe correction
+      connection.deleteSurroundingText(typed.length, 0)
+      connection.commitText(safeCorrection, 1)
       lastSuggestionOriginal = typed
-      lastSuggestionApplied = topSuggestion
-    } else if (typed.isNotBlank()) {
-      registerWord(typed)
-      NativeClipStore.addLearnedWord(this, typed)
+      lastSuggestionApplied = safeCorrection
+    } else {
+      // No replacement — just learn the word the user typed
+      if (typed.isNotBlank()) {
+        registerWord(typed)
+        NativeClipStore.addLearnedWord(this, typed)
+      }
       lastSuggestionOriginal = null
       lastSuggestionApplied = null
     }
-    
+
+    // Dynamic n-gram learning: record consecutive word sequence
+    val committedWord = safeCorrection ?: typed
+    if (committedWord.isNotBlank()) {
+      val textBefore = connection.getTextBeforeCursor(150, 0)?.toString() ?: ""
+      val prefixText = if (textBefore.endsWith(typed)) {
+        textBefore.dropLast(typed.length).trimEnd()
+      } else {
+        textBefore.trimEnd()
+      }
+      val prevWord = prefixText.split(Regex("\\s+")).lastOrNull { it.isNotBlank() }
+      if (!prevWord.isNullOrBlank() && prevWord != committedWord) {
+        com.clipvault.mobile.keyboard.SentenceContextEngine.recordWordCommit(prevWord, committedWord)
+      }
+    }
+
     connection.commitText(" ", 1)
     typedBuffer = ""
     nativeSuggestions = emptyList()
@@ -1729,8 +3693,10 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   private fun handleBackTouch(event: MotionEvent): Boolean {
     when (event.action) {
       MotionEvent.ACTION_DOWN -> {
-        deleteOneCharacter(refresh = false)
-        beginRepeatingDelete()
+        val wasUndo = deleteOneCharacter(refresh = true)
+        if (!wasUndo) {
+          beginRepeatingDelete()
+        }
         return true
       }
       MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
@@ -1752,7 +3718,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     }
 
     repeatDeleteRunnable = runnable
-    repeatHandler.postDelayed(runnable, 300L)
+    repeatHandler.postDelayed(runnable, 350L)
   }
 
   private fun stopRepeatingDelete() {
@@ -1765,33 +3731,73 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     pendingLongPressRunnable = null
   }
 
-  private fun deleteOneCharacter(refresh: Boolean = true) {
+  private fun deleteOneCharacter(refresh: Boolean = true): Boolean {
     try {
-      val ic = currentInputConnection ?: return
+      val ic = currentInputConnection ?: return false
 
-      // ─ Undo last accepted suggestion on first back-press
+      // ─ Undo last accepted suggestion on first back-press ──────────────────────
       val orig = lastSuggestionOriginal
       val applied = lastSuggestionApplied
-      if (orig != null && applied != null) {
-        val toDelete = "$applied "
-        ic.deleteSurroundingText(toDelete.length, 0)
-        ic.commitText(orig, 1)
-        typedBuffer = orig
-        // Learn rejection — never suggest this pair again, AND learn the original word
-        rejectedCorrections.add("$orig\u00B6$applied")
-        NativeClipStore.addLearnedWord(this, orig)
-        if (rejectedCorrections.size > 400) rejectedCorrections.remove(rejectedCorrections.first())
-        saveRejectedCorrections()
-        updateStatus("\u21A9 restored: $orig")
-        lastSuggestionOriginal = null
-        lastSuggestionApplied = null
-        if (refresh) updateSuggestionStrip()
-        return
+      if (applied != null) {
+        val textBefore = ic.getTextBeforeCursor(200, 0)?.toString() ?: ""
+        val appliedTrimmed = applied.trim()
+        val textTrimmed = textBefore.trimEnd {
+          it.isWhitespace() || it == '\u200F' || it == '\u200E' || it == '\u200B' || it == '\u00A0' || it == '\u061C'
+        }
+        val trailingWhitespaceCount = textBefore.length - textTrimmed.length
+
+        var matched = false
+        var deleteCount = 0
+
+        // Case 1: Exact suffix check (with or without trailing space)
+        if (textBefore.endsWith("$applied ")) {
+          deleteCount = applied.length + 1
+          matched = true
+        } else if (textBefore.endsWith(applied)) {
+          deleteCount = applied.length
+          matched = true
+        } else if (textTrimmed.endsWith(appliedTrimmed)) {
+          deleteCount = appliedTrimmed.length + trailingWhitespaceCount
+          matched = true
+        } else {
+          // Case 2: Unicode NFC normalization check
+          val normText = java.text.Normalizer.normalize(textTrimmed, java.text.Normalizer.Form.NFC)
+          val normApplied = java.text.Normalizer.normalize(appliedTrimmed, java.text.Normalizer.Form.NFC)
+          if (normText.endsWith(normApplied)) {
+            val targetLen = appliedTrimmed.length + trailingWhitespaceCount
+            deleteCount = targetLen.coerceAtMost(textBefore.length)
+            matched = true
+          }
+        }
+
+        if (matched && deleteCount > 0) {
+          ic.deleteSurroundingText(deleteCount, 0)
+          val restoreText = orig ?: ""
+          if (restoreText.isNotEmpty()) {
+            ic.commitText(restoreText, 1)
+            typedBuffer = restoreText
+            rejectedCorrections.add("$restoreText\u00B6$applied")
+            NativeClipStore.addLearnedWord(this, restoreText)
+            if (rejectedCorrections.size > 400) rejectedCorrections.remove(rejectedCorrections.first())
+            saveRejectedCorrections()
+            updateStatus("\u21A9 restored: $restoreText")
+          } else {
+            typedBuffer = ""
+            updateStatus("\u21A9 undone")
+          }
+          lastSuggestionOriginal = null
+          lastSuggestionApplied = null
+          updateSuggestionStrip()
+          return true
+        } else {
+          lastSuggestionOriginal = null
+          lastSuggestionApplied = null
+        }
       }
 
       lastSuggestionOriginal = null
       lastSuggestionApplied = null
-      
+
       // Handle Select-All + Delete
       val selected = ic.getSelectedText(0)
       if (!selected.isNullOrEmpty()) {
@@ -1801,8 +3807,9 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       }
       if (typedBuffer.isNotEmpty()) typedBuffer = typedBuffer.dropLast(1)
       if (refresh) updateSuggestionStrip()
+      return false
     } catch (e: Exception) {
-      // Ensure crashes don't bring down the keyboard
+      return false
     }
   }
 
@@ -1831,15 +3838,33 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       orientation = LinearLayout.VERTICAL
       gravity = Gravity.CENTER
       setPadding(dp(4), dp(4), dp(4), dp(4))
-      background = keyBackground(colors, true)
+      background = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(10).toFloat()
+        setColor(colors.surface)
+        setStroke(dp(1), colors.stroke)
+      }
+      elevation = dp(8).toFloat()
     }
 
-    val rows = if (alternates.size > 6) {
+    val anchorKey = anchor.tag as? String ?: ""
+    val isUrduPeriod = anchorKey == "urdu_period" || (alternates.contains("urdu_qmark") && alternates.contains("!"))
+    val isTopRowNumberKey = (layoutMode == LayoutMode.UR && topRowNumberAlternatesMapUr.containsKey(anchorKey)) ||
+                            (layoutMode == LayoutMode.AR && topRowNumberAlternatesMapAr.containsKey(anchorKey))
+
+    val rows = if (isUrduPeriod && alternates.contains("zabar")) {
+      val splitIdx = alternates.indexOf("zabar").takeIf { it > 0 } ?: (alternates.size / 2)
+      listOf(alternates.take(splitIdx), alternates.drop(splitIdx))
+    } else if (alternates.size > 8) {
       val mid = (alternates.size + 1) / 2
       listOf(alternates.take(mid), alternates.drop(mid))
     } else {
       listOf(alternates)
     }
+
+    val btnW = if (alternates.size > 8) dp(36) else dp(42)
+    val btnH = if (alternates.size > 8) dp(42) else dp(46)
+    val fontSz = if (alternates.size > 8) 18f else 21f
 
     rows.forEach { rowKeys ->
       val rowLayout = LinearLayout(this).apply {
@@ -1849,7 +3874,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       }
       rowKeys.forEach { alternate ->
         val btn = createKeyButton(labelFor(alternate), alternate, colors, false).apply {
-          textSize = if (alternate.length > 1) 18f else 24f
+          textSize = if (alternate.length > 2) 13f else fontSz
           tag = alternate   // stored for slide-to-select
           setOnClickListener {
             handleKey(alternate)
@@ -1858,17 +3883,51 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
           }
         }
         buttons.add(btn)
-        rowLayout.addView(btn, LinearLayout.LayoutParams(dp(44), dp(46)).apply {
-          setMargins(dp(2), 0, dp(2), 0)
+        rowLayout.addView(btn, LinearLayout.LayoutParams(btnW, btnH).apply {
+          setMargins(dp(1), 0, dp(1), 0)
         })
       }
       container.addView(rowLayout)
     }
 
     slideAlternateButtons = buttons
-    slideHighlightedIndex = 0
 
-    val yOffset = if (alternates.size > 6) -dp(120) else -dp(98)
+    val defaultInitialIdx = if (isUrduPeriod) {
+      buttons.indexOfFirst { it.tag == "urdu_qmark" }.takeIf { it >= 0 } ?: (buttons.size / 2).coerceIn(0, buttons.size - 1)
+    } else if (isTopRowNumberKey) {
+      0
+    } else {
+      (buttons.size / 2).coerceIn(0, buttons.size - 1)
+    }
+    slideHighlightedIndex = defaultInitialIdx
+
+    val maxRowSize = rows.maxOfOrNull { it.size } ?: 1
+    val estimatedPopupWidth = dp(8) + maxRowSize * (btnW + dp(2))
+    
+    // Popup height: container top/bottom padding dp(8) + rows * (btnH + dp(2))
+    val popupHeight = dp(8) + rows.size * (btnH + dp(2))
+    val anchorHeight = if (anchor.height > 0) anchor.height else dp(48)
+    // To ensure the popup sits cleanly on the row ABOVE the pressed key (never under the finger),
+    // offset so popup bottom floats 4dp above anchor top.
+    val yOffset = -(anchorHeight + popupHeight + dp(4))
+
+    // Calculate clamped xOffset so popup stays within screen bounds
+    val screenWidth = resources.displayMetrics.widthPixels
+    val anchorLoc = IntArray(2)
+    anchor.getLocationOnScreen(anchorLoc)
+    val anchorCenterX = anchorLoc[0] + anchor.width / 2
+
+    val desiredX = if (isUrduPeriod && alternates.contains("urdu_qmark")) {
+      // In bottom row, urdu_qmark is aligned directly with anchor key center
+      val bottomRow = rows.lastOrNull() ?: emptyList()
+      val qmarkPosInRow = bottomRow.indexOf("urdu_qmark").coerceAtLeast(0)
+      val qmarkOffsetInPopup = dp(4) + qmarkPosInRow * (btnW + dp(2)) + btnW / 2
+      anchorCenterX - qmarkOffsetInPopup
+    } else {
+      anchorLoc[0] + (anchor.width - estimatedPopupWidth) / 2
+    }
+    val clampedX = desiredX.coerceIn(dp(4), (screenWidth - estimatedPopupWidth - dp(4)).coerceAtLeast(dp(4)))
+    val xOffset = clampedX - anchorLoc[0]
 
     alternatePopup = PopupWindow(
       container,
@@ -1877,14 +3936,63 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       false,
     ).apply {
       isOutsideTouchable = true
-      isClippingEnabled = true
+      isClippingEnabled = false
       elevation = dp(10).toFloat()
-      showAsDropDown(anchor, 0, yOffset)
+      showAsDropDown(anchor, xOffset, yOffset)
     }
 
-    buttons.firstOrNull()?.let {
+    // Default highlight until layout completes
+    buttons.getOrNull(defaultInitialIdx)?.let {
       it.background = keyBackground(colors, true)
       it.alpha = 1f
+    }
+
+    // Post layout: find the exact button whose center is closest to anchor center on screen
+    container.post {
+      if (alternatePopup?.isShowing == true && slideAlternateButtons.isNotEmpty()) {
+        if (isUrduPeriod) {
+          val qmarkIdx = slideAlternateButtons.indexOfFirst { it.tag == "urdu_qmark" }
+          if (qmarkIdx >= 0) {
+            slideHighlightedIndex = qmarkIdx
+            val c = themeColors()
+            slideAlternateButtons.forEachIndexed { i, b ->
+              b.background = keyBackground(c, i == qmarkIdx)
+              b.alpha = if (i == qmarkIdx) 1f else 0.55f
+            }
+            return@post
+          }
+        }
+        if (isTopRowNumberKey) {
+          slideHighlightedIndex = 0
+          val c = themeColors()
+          slideAlternateButtons.forEachIndexed { i, b ->
+            b.background = keyBackground(c, i == 0)
+            b.alpha = if (i == 0) 1f else 0.55f
+          }
+          return@post
+        }
+        val curALoc = IntArray(2)
+        anchor.getLocationOnScreen(curALoc)
+        val curACenterX = curALoc[0] + anchor.width / 2f
+        val bLoc = IntArray(2)
+        var bestIdx = 0
+        var bestDist = Float.MAX_VALUE
+        slideAlternateButtons.forEachIndexed { i, b ->
+          b.getLocationOnScreen(bLoc)
+          val bCenterX = bLoc[0] + b.width / 2f
+          val dist = Math.abs(bCenterX - curACenterX)
+          if (dist < bestDist) {
+            bestDist = dist
+            bestIdx = i
+          }
+        }
+        slideHighlightedIndex = bestIdx
+        val c = themeColors()
+        slideAlternateButtons.forEachIndexed { i, b ->
+          b.background = keyBackground(c, i == bestIdx)
+          b.alpha = if (i == bestIdx) 1f else 0.55f
+        }
+      }
     }
   }
 
@@ -1896,175 +4004,71 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   }
 
   private fun alternatesForKey(key: String): List<String> {
-    val numberAlternates = topRowNumberAlternates()[key].orEmpty()
+    val numberAlternates = when (layoutMode) {
+      LayoutMode.UR -> topRowNumberAlternatesMapUr[key].orEmpty()
+      LayoutMode.AR -> topRowNumberAlternatesMapAr[key].orEmpty()
+      else -> emptyList()
+    }
     val letterAlternates = when (layoutMode) {
-      LayoutMode.UR -> urduAlternates()[key].orEmpty()
-      LayoutMode.AR -> arabicAlternates()[key].orEmpty()
-      LayoutMode.EN, LayoutMode.SYMBOLS -> englishAlternates()[key].orEmpty()
+      LayoutMode.UR -> urduAlternatesMap[key].orEmpty()
+      LayoutMode.AR -> arabicAlternatesMap[key].orEmpty()
+      LayoutMode.EN, LayoutMode.SYMBOLS -> englishAlternatesMap[key].orEmpty()
     }
 
     return (numberAlternates + letterAlternates).distinct().filter { it != key }
   }
 
-  private fun topRowNumberAlternates(): Map<String, List<String>> {
-    val topRow = when (layoutMode) {
-      LayoutMode.UR -> listOf("\u0636", "\u0635", "\u063A", "\u0691", "\u0679", "\u062B", "\u062D", "\u0626", "\u0638", "\u0637")
-      LayoutMode.AR -> listOf("\u0636", "\u0635", "\u062B", "\u0642", "\u0641", "\u063A", "\u0639", "\u0647", "\u062E", "\u062C")
-      else -> emptyList()
-    }
-
-    return topRow.zip(listOf("1", "2", "3", "4", "5", "6", "7", "8", "9", "0"))
-      .associate { (letter, number) -> letter to listOf(number) }
-  }
-
-  private fun englishAlternates(): Map<String, List<String>> {
-    return mapOf(
-      "a" to listOf("@", "\u00E1", "\u00E0"),
-      "e" to listOf("\u00E9", "\u00E8"),
-      "i" to listOf("\u00ED", "\u00EC"),
-      "o" to listOf("\u00F3", "\u00F2"),
-      "u" to listOf("\u00FA", "\u00F9"),
-      "." to listOf(",", "?", "!"),
-      "," to listOf("emoji"),
-    )
-  }
-
   private fun emojiPages(): List<List<String>> {
-    return listOf(
-      listOf(
-        "\uD83D\uDE00", "\uD83D\uDE03", "\uD83D\uDE04", "\uD83D\uDE01", "\uD83D\uDE06", "\uD83D\uDE05", "\uD83E\uDD23", "\uD83D\uDE02",
-        "\uD83D\uDE42", "\uD83D\uDE43", "\uD83D\uDE09", "\uD83D\uDE0A", "\uD83D\uDE07", "\uD83E\uDD70", "\uD83D\uDE0D", "\uD83E\uDD29",
-        "\uD83D\uDE18", "\uD83D\uDE17", "\u263A\uFE0F", "\uD83D\uDE1A", "\uD83D\uDE19", "\uD83E\uDD72", "\uD83D\uDE0B", "\uD83D\uDE1B",
-        "\uD83D\uDE1C", "\uD83E\uDD2A", "\uD83D\uDE1D", "\uD83E\uDD11", "\uD83E\uDD17", "\uD83E\uDD2D", "\uD83E\uDEE2", "\uD83E\uDEE3",
-      ),
-      listOf(
-        "\uD83E\uDD14", "\uD83E\uDEE1", "\uD83E\uDD10", "\uD83E\uDD28", "\uD83D\uDE10", "\uD83D\uDE11", "\uD83D\uDE36", "\uD83D\uDE36\u200D\uD83C\uDF2B\uFE0F",
-        "\uD83D\uDE0F", "\uD83D\uDE12", "\uD83D\uDE44", "\uD83D\uDE2C", "\uD83D\uDE2E\u200D\uD83D\uDCA8", "\uD83E\uDD25", "\uD83D\uDE0C", "\uD83D\uDE14",
-        "\uD83D\uDE2A", "\uD83E\uDD24", "\uD83D\uDE34", "\uD83D\uDE37", "\uD83E\uDD12", "\uD83E\uDD15", "\uD83E\uDD27", "\uD83E\uDD2E",
-        "\uD83E\uDD22", "\uD83E\uDD2F", "\uD83E\uDD20", "\uD83E\uDD73", "\uD83E\uDD78", "\uD83D\uDE0E", "\uD83E\uDD13", "\uD83E\uDDD0",
-      ),
-      listOf(
-        "\uD83D\uDE15", "\uD83E\uDEE4", "\uD83D\uDE1F", "\uD83D\uDE2E", "\uD83D\uDE2F", "\uD83D\uDE32", "\uD83D\uDE33", "\uD83E\uDD7A",
-        "\uD83E\uDD79", "\uD83D\uDE26", "\uD83D\uDE27", "\uD83D\uDE28", "\uD83D\uDE30", "\uD83D\uDE25", "\uD83D\uDE22", "\uD83D\uDE2D",
-        "\uD83D\uDE31", "\uD83D\uDE16", "\uD83D\uDE23", "\uD83D\uDE1E", "\uD83D\uDE13", "\uD83D\uDE29", "\uD83D\uDE2B", "\uD83E\uDD71",
-        "\uD83D\uDE24", "\uD83D\uDE21", "\uD83D\uDE20", "\uD83E\uDD2C", "\uD83D\uDE08", "\uD83D\uDC7F", "\uD83D\uDC80", "\u2620\uFE0F",
-      ),
-      listOf(
-        "\uD83D\uDC4B", "\uD83E\uDD1A", "\uD83D\uDD90\uFE0F", "\u270B", "\uD83D\uDD96", "\uD83D\uDC4C", "\uD83E\uDD0C", "\uD83E\uDD0F",
-        "\u270C\uFE0F", "\uD83E\uDD1E", "\uD83E\uDEE0", "\uD83E\uDD1F", "\uD83E\uDD18", "\uD83E\uDD19", "\uD83D\uDC48", "\uD83D\uDC49",
-        "\uD83D\uDC46", "\uD83D\uDC47", "\u261D\uFE0F", "\uD83D\uDC4D", "\uD83D\uDC4E", "\u270A", "\uD83D\uDC4A", "\uD83E\uDD1B",
-        "\uD83E\uDD1C", "\uD83D\uDC4F", "\uD83E\uDEB6", "\uD83D\uDE4C", "\uD83E\uDEE3", "\uD83E\uDD32", "\uD83D\uDE4F", "\u270D\uFE0F",
-      ),
-      listOf(
-        "\uD83D\uDC76", "\uD83E\uDDD2", "\uD83D\uDC66", "\uD83D\uDC67", "\uD83E\uDDD1", "\uD83D\uDC68", "\uD83D\uDC69", "\uD83E\uDDD4",
-        "\uD83D\uDC74", "\uD83D\uDC75", "\uD83D\uDE4D", "\uD83D\uDE4E", "\uD83D\uDE45", "\uD83D\uDE46", "\uD83D\uDC81", "\uD83D\uDE4B",
-        "\uD83E\uDDD1\u200D\uD83C\uDF93", "\uD83E\uDDD1\u200D\uD83D\uDCBB", "\uD83E\uDDD1\u200D\uD83C\uDFEB", "\uD83E\uDDD1\u200D\u2695\uFE0F", "\uD83E\uDDD1\u200D\uD83D\uDE80", "\uD83D\uDC6E", "\uD83D\uDD75\uFE0F", "\uD83D\uDC82",
-        "\uD83E\uDD77", "\uD83D\uDC77", "\uD83E\uDD34", "\uD83D\uDC78", "\uD83D\uDC73", "\uD83D\uDC72", "\uD83E\uDD35", "\uD83D\uDC70",
-      ),
-      listOf(
-        "\uD83D\uDC36", "\uD83D\uDC31", "\uD83D\uDC2D", "\uD83D\uDC39", "\uD83D\uDC30", "\uD83E\uDD8A", "\uD83D\uDC3B", "\uD83D\uDC3C",
-        "\uD83D\uDC28", "\uD83D\uDC2F", "\uD83E\uDD81", "\uD83D\uDC2E", "\uD83D\uDC37", "\uD83D\uDC38", "\uD83D\uDC35", "\uD83D\uDE48",
-        "\uD83D\uDE49", "\uD83D\uDE4A", "\uD83D\uDC14", "\uD83D\uDC27", "\uD83D\uDC26", "\uD83E\uDD86", "\uD83E\uDD85", "\uD83E\uDD89",
-        "\uD83E\uDD87", "\uD83D\uDC3A", "\uD83D\uDC17", "\uD83D\uDC34", "\uD83E\uDD84", "\uD83D\uDC1D", "\uD83E\uDD8B", "\uD83D\uDC1E",
-      ),
-      listOf(
-        "\uD83C\uDF4F", "\uD83C\uDF4E", "\uD83C\uDF50", "\uD83C\uDF4A", "\uD83C\uDF4B", "\uD83C\uDF4C", "\uD83C\uDF49", "\uD83C\uDF47",
-        "\uD83C\uDF53", "\uD83E\uDED0", "\uD83C\uDF48", "\uD83C\uDF52", "\uD83C\uDF51", "\uD83E\uDD6D", "\uD83C\uDF4D", "\uD83E\uDD65",
-        "\uD83E\uDD5D", "\uD83C\uDF45", "\uD83E\uDD51", "\uD83E\uDD66", "\uD83E\uDD52", "\uD83C\uDF36\uFE0F", "\uD83E\uDED1", "\uD83C\uDF3D",
-        "\uD83E\uDD55", "\uD83E\uDED2", "\uD83C\uDF5E", "\uD83E\uDD50", "\uD83E\uDD56", "\uD83E\uDD68", "\uD83E\uDD6F", "\uD83E\uDD5E",
-      ),
-      listOf(
-        "\uD83C\uDF54", "\uD83C\uDF5F", "\uD83C\uDF55", "\uD83C\uDF2D", "\uD83E\uDD6A", "\uD83C\uDF2E", "\uD83C\uDF2F", "\uD83E\uDED4",
-        "\uD83E\uDD57", "\uD83E\uDD58", "\uD83C\uDF5D", "\uD83C\uDF5C", "\uD83C\uDF72", "\uD83C\uDF5B", "\uD83C\uDF63", "\uD83C\uDF71",
-        "\uD83E\uDD5F", "\uD83E\uDD60", "\uD83C\uDF66", "\uD83C\uDF67", "\uD83C\uDF70", "\uD83C\uDF82", "\uD83E\uDDC1", "\uD83C\uDF6B",
-        "\u2615", "\uD83E\uDD64", "\uD83E\uDDC3", "\uD83C\uDF7A", "\uD83C\uDF77", "\uD83E\uDD42", "\uD83C\uDF79", "\uD83E\uDDC9",
-      ),
-      listOf(
-        "\uD83D\uDE97", "\uD83D\uDE95", "\uD83D\uDE99", "\uD83D\uDE8C", "\uD83D\uDE8E", "\uD83C\uDFCE\uFE0F", "\uD83D\uDE93", "\uD83D\uDE91",
-        "\uD83D\uDE92", "\uD83D\uDE9A", "\uD83D\uDEB2", "\uD83D\uDEF5", "\uD83C\uDFCD\uFE0F", "\u2708\uFE0F", "\uD83D\uDE80", "\uD83D\uDEF8",
-        "\uD83D\uDE81", "\uD83D\uDE86", "\uD83D\uDE87", "\uD83D\uDEA2", "\u26F5", "\uD83D\uDEA4", "\uD83D\uDDFD", "\uD83D\uDDFC",
-        "\uD83C\uDFE0", "\uD83C\uDFE2", "\uD83C\uDFE5", "\uD83C\uDFE6", "\uD83C\uDFE8", "\uD83C\uDFEA", "\uD83D\uDCCD", "\uD83D\uDDFA\uFE0F",
-      ),
-      listOf(
-        "\uD83D\uDCF1", "\uD83D\uDCBB", "\u2328\uFE0F", "\uD83D\uDDA5\uFE0F", "\uD83D\uDDA8\uFE0F", "\uD83D\uDCF7", "\uD83C\uDFA5", "\uD83D\uDCFA",
-        "\uD83D\uDCB0", "\uD83D\uDCB3", "\uD83D\uDC8E", "\u2696\uFE0F", "\uD83D\uDEE0\uFE0F", "\u2699\uFE0F", "\uD83D\uDD27", "\uD83D\uDD28",
-        "\uD83D\uDCA1", "\uD83D\uDD26", "\uD83D\uDD0B", "\uD83E\uDDF2", "\uD83D\uDCD6", "\uD83D\uDCDD", "\uD83D\uDCCB", "\uD83D\uDCCC",
-        "\uD83D\uDCE7", "\uD83D\uDCE8", "\uD83D\uDD12", "\uD83D\uDD11", "\uD83D\uDD0E", "\uD83D\uDD17", "\u2702\uFE0F", "\uD83D\uDDD1\uFE0F",
-      ),
-      listOf(
-        "\u2764\uFE0F", "\uD83E\uDDE1", "\uD83D\uDC9B", "\uD83D\uDC9A", "\uD83D\uDC99", "\uD83D\uDC9C", "\uD83E\uDD0E", "\uD83D\uDDA4",
-        "\uD83E\uDD0D", "\uD83D\uDC94", "\u2763\uFE0F", "\uD83D\uDCAF", "\uD83D\uDCA2", "\uD83D\uDCA5", "\uD83D\uDCAB", "\uD83D\uDCA6",
-        "\uD83D\uDCA8", "\uD83D\uDD73\uFE0F", "\uD83D\uDCA3", "\uD83D\uDCAC", "\uD83D\uDCAC", "\uD83D\uDDE8\uFE0F", "\uD83D\uDDEF\uFE0F", "\uD83D\uDCA4",
-        "\uD83C\uDF1F", "\u2728", "\u26A1", "\uD83D\uDD25", "\uD83C\uDF08", "\u2600\uFE0F", "\uD83C\uDF19", "\u2B50",
-      ),
-      listOf(
-        "\u2705", "\u2611\uFE0F", "\u2714\uFE0F", "\u274C", "\u274E", "\u2795", "\u2796", "\u2797",
-        "\u27A1\uFE0F", "\u2B05\uFE0F", "\u2B06\uFE0F", "\u2B07\uFE0F", "\u2197\uFE0F", "\u2198\uFE0F", "\u21A9\uFE0F", "\u21AA\uFE0F",
-        "\u2139\uFE0F", "\u2757", "\u2753", "\u2755", "\u2754", "\u267B\uFE0F", "\u267E\uFE0F", "\u269C\uFE0F",
-        "\uD83D\uDD31", "\uD83D\uDD30", "\u2B55", "\uD83D\uDFE2", "\uD83D\uDD35", "\uD83D\uDFE3", "\uD83D\uDFE1", "\u26AB",
-      ),
-    )
-  }
-
-  private fun urduAlternates(): Map<String, List<String>> {
-    return mapOf(
-      "urdu_comma" to listOf("emoji"),
-      "urdu_qmark" to listOf("zabar", "zer", "pesh", "do_zabar", "do_zer", "do_pesh", "sukun", "shadda", "maddah", "khari_zabar", "khari_zer", "ulta_pesh", "hamza_above", "marks"),
-      "\u0627" to listOf("\u0622", "\u0623", "\u0625"),
-      "\u0628" to listOf("\u067E"),
-      "\u062A" to listOf("\u0679", "\u062B"),
-      "\u062C" to listOf("\u0686"),
-      "\u062D" to listOf("\u062E"),
-      "\u062F" to listOf("\u0688", "\u0630"),
-      "\u0631" to listOf("\u0691"),
-      "\u0632" to listOf("\u0698"),
-      "\u0633" to listOf("\u0634", "\u0635"),
-      "\u0637" to listOf("\u0638"),
-      "\u06A9" to listOf("\u06AF", "\u0643"),
-      "\u0646" to listOf("\u06BA"),
-      "\u06C1" to listOf("\u06BE", "\u06C2", "\u06C3", "\u0629"),
-      "\u0621" to listOf("\u0654", "\u0624", "\u0626"),
-      "\u0648" to listOf("\u0624"),
-      "\u06CC" to listOf("\u0626", "\u06D2", "\u064A"),
-      "\u06D2" to listOf("\u0626\u06D2", "\u0626", "\u06CC"),
-      "\u0644" to listOf("\u0644\u0627"),
-    )
-  }
-
-  private fun arabicAlternates(): Map<String, List<String>> {
-    return mapOf(
-      "urdu_comma" to listOf("emoji"),
-      "urdu_qmark" to listOf("zabar", "zer", "pesh", "do_zabar", "marks"),
-      "\u0627" to listOf("\u0623", "\u0625", "\u0622"),
-      "\u062A" to listOf("\u062B", "\u0629"),
-      "\u062D" to listOf("\u062E"),
-      "\u062F" to listOf("\u0630"),
-      "\u0633" to listOf("\u0634", "\u0635"),
-      "\u0637" to listOf("\u0638"),
-      "\u0647" to listOf("\u0629"),
-      "\u0621" to listOf("\u0654", "\u0624", "\u0626"),
-      "\u0648" to listOf("\u0624"),
-      "\u064A" to listOf("\u0649", "\u0626"),
-      "\u0644" to listOf("\u0644\u0627"),
-    )
+    return com.clipvault.mobile.keyboard.EmojiCatalog.allCategories(recentEmojis).map { it.emojis }
   }
 
   private fun insertSuggestion(suggestion: String) {
     val connection = currentInputConnection ?: return
-    
-    if (suggestion == typedBuffer) {
-      NativeClipStore.addLearnedWord(this, suggestion)
+
+    val textBefore = connection.getTextBeforeCursor(150, 0)?.toString() ?: ""
+    val bufLen = typedBuffer.length
+
+    val wordBeingReplaced = if (bufLen > 0 && textBefore.endsWith(typedBuffer)) {
+      typedBuffer
+    } else {
+      textBefore.takeLastWhile {
+        it.isLetterOrDigit() || it.code in 0x0600..0x06FF || it == '_' || it == '\''
+      }
     }
 
-    lastSuggestionOriginal = typedBuffer.ifBlank { null }
+    val toDeleteLen = wordBeingReplaced.length
+
+    // Dynamic n-gram learning: learn consecutive words
+    val prefixText = if (toDeleteLen > 0 && textBefore.endsWith(wordBeingReplaced)) {
+      textBefore.dropLast(toDeleteLen).trimEnd()
+    } else {
+      textBefore.trimEnd()
+    }
+    val prevWord = prefixText.split(Regex("\\s+")).lastOrNull { it.isNotBlank() }
+    if (!prevWord.isNullOrBlank() && prevWord != suggestion) {
+      com.clipvault.mobile.keyboard.SentenceContextEngine.recordWordCommit(prevWord, suggestion)
+    }
+
+    // Learn word if user explicitly taps their exact typed word
+    if (wordBeingReplaced.isNotEmpty() && suggestion.equals(wordBeingReplaced, ignoreCase = true)) {
+      NativeClipStore.addLearnedWord(this, suggestion)
+      registerWord(suggestion)
+    }
+
+    // Store undo information BEFORE making any changes:
+    // If a word was replaced, orig is wordBeingReplaced. If no word replaced, orig is "" (so delete erases suggestion).
+    lastSuggestionOriginal = wordBeingReplaced
     lastSuggestionApplied = suggestion
 
-    if (typedBuffer.isNotEmpty()) {
-      connection.deleteSurroundingText(typedBuffer.length, 0)
+    // Delete typed buffer then insert suggestion + space
+    if (toDeleteLen > 0) {
+      connection.deleteSurroundingText(toDeleteLen, 0)
     }
-    
+
     connection.commitText("$suggestion ", 1)
-    registerWord(suggestion)
+    if (wordBeingReplaced.isNotEmpty() && !suggestion.equals(wordBeingReplaced, ignoreCase = true)) {
+      registerWord(suggestion)
+    }
     typedBuffer = ""
     updateStatus("\u2713 accepted \u2014 \u232B to undo")
     updateSuggestionStrip()
@@ -2243,13 +4247,27 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   // ─────────────────────────────────────────────────────────────
   // Simple Suggestion Fallback / Learning
   // ─────────────────────────────────────────────────────────────
-  private fun suggestionsForBuffer(): List<String> {
-    val typed = typedBuffer.trim()
-    if (typed.isBlank()) return emptyList()
+  private fun computeDeepSuggestions(typed: String): List<String> {
+    val trimmed = typed.trim()
+    val ic = currentInputConnection
+    val textBefore = ic?.getTextBeforeCursor(250, 0)?.toString() ?: ""
+
+    if (trimmed.isBlank()) {
+        if (lastSwipeAlternatives.isNotEmpty()) {
+            return lastSwipeAlternatives.take(3)
+        }
+        // Gboard-grade Context-Aware Sentence Prediction Engine
+        val predictions = com.clipvault.mobile.keyboard.SentenceContextEngine.predictNextWords(textBefore, 3)
+        if (predictions.isNotEmpty()) {
+            return predictions
+        }
+        return emptyList()
+    }
+    lastSwipeAlternatives = emptyList()
 
     // Math Calculator
     val mathRegex = Regex("""^(\d+(?:\.\d+)?)\s*([\+\-\*/])\s*(\d+(?:\.\d+)?)\s*=$""")
-    val mathMatch = mathRegex.find(typed)
+    val mathMatch = mathRegex.find(trimmed)
     if (mathMatch != null) {
       try {
         val num1 = mathMatch.groupValues[1].toDouble()
@@ -2270,37 +4288,83 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     }
 
     if (isSearchingClips) {
-      return NativeClipStore.search(this, typed, 5).map { it.replace("\n", " ").trim() }
+      return NativeClipStore.search(this, trimmed, 5).map { it.replace("\n", " ").trim() }
     }
 
-    val dictionary = dictionaryForLayout() + getPersonalDictionary() + NativeClipStore.getLearnedWords(this)
-    val normalized = typed.lowercase()
-    val correction = bestCorrectionFor(typed)?.takeIf { it != typed }
-    val prefixMatches = dictionary
-      .filter { it.lowercase().startsWith(normalized) && it != typed }
-      .take(3)
-    val fuzzyMatches = dictionary
-      .map { it to editDistance(normalized, it.lowercase()) }
-      .filter { (_, distance) -> distance <= allowedCorrectionDistance(normalized.length) }
-      .sortedWith(compareBy<Pair<String, Int>> { it.second }.thenBy { it.first.length })
-      .map { it.first }
-    val recommendations = dictionary
-      .filter { it != typed && it !in prefixMatches && it !in fuzzyMatches }
-      .filter { it.length >= typed.length }
-      .take(3)
+    val normalized = trimmed.lowercase()
+    val firstChar = normalized[0]
+    val baseBucket = indexedBaseDictionary(layoutMode)[firstChar].orEmpty()
+    val swipeBucket = indexedSwipeDictionary[firstChar].orEmpty()
+    val personalList = cachedPersonalDictionary + cachedLearnedWords
+
+    // 1. Roman Urdu transliteration (instant phonetics)
+    val romanUrduMatches = if (layoutMode == LayoutMode.EN || layoutMode == LayoutMode.SYMBOLS) {
+      com.clipvault.mobile.keyboard.RomanUrduEngine.transliterate(trimmed)
+    } else emptyList()
+
+    // 2. Exact match check
+    val hasExact = baseBucket.any { it.equals(normalized, ignoreCase = true) } ||
+                   personalList.any { it.equals(trimmed, ignoreCase = true) }
+
+    // 3. Context-Boosted Prefix Matches: prioritizing words that fit the preceding sentence
+    val rawDictionaryCandidates = (baseBucket + personalList + swipeBucket)
+    val prefixMatches = com.clipvault.mobile.keyboard.SentenceContextEngine.boostWithContext(
+      textBefore, normalized, rawDictionaryCandidates, 4
+    )
+
+    // 4. Contextual Emoji Suggestion (e.g. love -> ❤️, tea -> ☕, fire -> 🔥)
+    val contextEmojis = com.clipvault.mobile.keyboard.EmojiCatalog.suggestContextEmojis(trimmed)
+
+    // 5. Correction & Fuzzy matches (only if not exact and length >= 3)
+    var correction: String? = null
+    val fuzzyMatches = mutableListOf<String>()
+    if (!hasExact && trimmed.length >= 3) {
+      val common = commonCorrectionFor(normalized)
+      if (common != null && "$trimmed\u00B6$common" !in rejectedCorrections) {
+        correction = common
+      }
+
+      val maxDist = allowedCorrectionDistance(trimmed.length)
+      val candidates = (baseBucket + personalList).filter {
+        Math.abs(it.length - trimmed.length) <= maxDist &&
+        "$trimmed\u00B6$it" !in rejectedCorrections
+      }
+      val scored = candidates.map { it to editDistance(normalized, it.lowercase(), maxDist) }
+        .filter { it.second in 1..maxDist }
+        .sortedWith(compareBy<Pair<String, Int>> { it.second }.thenBy { it.first.length })
+
+      if (correction == null && scored.isNotEmpty()) {
+        correction = scored.first().first
+      }
+      for (item in scored.take(3)) {
+        if (item.first != correction) fuzzyMatches.add(item.first)
+      }
+    }
 
     val res = mutableListOf<String>()
+    if (romanUrduMatches.isNotEmpty()) {
+      res.addAll(romanUrduMatches)
+    }
     if (correction != null) {
       res.add(correction)
-      res.add(typed) // Literal typed word is second if there's a correction
+      res.add(trimmed)
     } else {
-      res.add(typed) // Literal typed word is first if no correction
+      res.add(trimmed)
+    }
+    // Contextual emoji inline suggestion
+    if (contextEmojis.isNotEmpty()) {
+      res.add(contextEmojis.first())
     }
     res.addAll(prefixMatches)
     res.addAll(fuzzyMatches)
-    res.addAll(recommendations)
-    
+
     return res.distinct().take(3)
+  }
+
+  private fun suggestionsForBuffer(): List<String> {
+    val typed = typedBuffer.trim()
+    if (typed.isBlank()) return emptyList()
+    return computeDeepSuggestions(typed)
   }
 
   private fun bestCorrectionFor(value: String): String? {
@@ -2308,7 +4372,6 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     if (typed.length < 3 || typed.any { it.isDigit() }) return null
 
     val normalized = typed.lowercase()
-    // Check common corrections, skip if user rejected this pair before
     commonCorrectionFor(normalized)?.let { correction ->
       if ("$typed\u00B6$correction" !in rejectedCorrections) return correction
     }
@@ -2316,43 +4379,23 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     val exact = dictionaryForLayout().firstOrNull { it.lowercase() == normalized }
     if (exact != null) return null
 
-    return dictionaryForLayout()
-      .map { it to editDistance(normalized, it.lowercase()) }
-      .filter { (candidate, distance) ->
-        distance in 1..allowedCorrectionDistance(normalized.length) &&
-        "$typed\u00B6$candidate" !in rejectedCorrections  // skip user-rejected
-      }
+    val maxDist = allowedCorrectionDistance(normalized.length)
+    val firstChar = normalized[0]
+    val pool = (indexedBaseDictionary(layoutMode)[firstChar].orEmpty() + cachedPersonalDictionary + cachedLearnedWords)
+      .filter { Math.abs(it.length - normalized.length) <= maxDist && "$typed\u00B6$it" !in rejectedCorrections }
+
+    return pool
+      .map { it to editDistance(normalized, it.lowercase(), maxDist) }
+      .filter { it.second in 1..maxDist }
       .sortedWith(compareBy<Pair<String, Int>> { it.second }.thenBy { it.first.length })
       .firstOrNull()?.first
   }
 
   private fun commonCorrectionFor(value: String): String? {
-    val english = mapOf(
-      "teh" to "the",
-      "adn" to "and",
-      "recieve" to "receive",
-      "adress" to "address",
-      "mesage" to "message",
-      "setings" to "settings",
-      "clipbord" to "clipboard",
-      "keybord" to "keyboard",
-      "whatsapp" to "WhatsApp",
-      "mindcrafts" to "MindCrafts_AI",
-      "codehub" to "codehubb",
-    )
-    val urdu = mapOf(
-      "\u0627\u0645\u06CC\u0646" to "\u0622\u0645\u06CC\u0646",
-      "\u0627\u067E" to "\u0622\u067E",
-      "\u0627\u062C" to "\u0622\u062C",
-      "\u0627\u0648\u0627\u0632" to "\u0622\u0648\u0627\u0632",
-      "\u0627\u0633\u0627\u0646" to "\u0622\u0633\u0627\u0646",
-      "\u0627\u0632\u0627\u062F" to "\u0622\u0632\u0627\u062F",
-    )
-
     return when (layoutMode) {
-      LayoutMode.UR -> urdu[value]
+      LayoutMode.UR -> urduCommonCorrections[value]
       LayoutMode.AR -> null
-      LayoutMode.EN, LayoutMode.SYMBOLS -> english[value]
+      LayoutMode.EN, LayoutMode.SYMBOLS -> englishCommonCorrections[value]
     }
   }
 
@@ -2365,131 +4408,213 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   }
 
   private fun dictionaryForLayout(): List<String> {
-    val base = when (layoutMode) {
-      LayoutMode.EN, LayoutMode.SYMBOLS -> listOf(
-        "about",
-        "account",
-        "address",
-        "appointment",
-        "available",
-        "beautiful",
-        "backup",
-        "business",
-        "clipboard",
-        "confirm",
-        "contact",
-        "details",
-        "document",
-        "email",
-        "hello",
-        "important",
-        "keyboard",
-        "meeting",
-        "message",
-        "mindcrafts",
-        "number",
-        "payment",
-        "please",
-        "project",
-        "reply",
-        "restore",
-        "saved",
-        "search",
-        "settings",
-        "thanks",
-        "today",
-        "tomorrow",
-        "update",
-        "typing",
-        "suggestion",
-        "capture",
-        "export",
-        "category",
-        "phone",
-        "email",
-        "number",
-        "dashboard",
-        "feature",
-        "professional",
-        "application",
-        "automatic",
-        "correction",
-        "language",
-        "privacy",
-        "website",
-      )
-      LayoutMode.UR -> listOf(
-        "\u0622\u062C",
-        "\u0622\u067E",
-        "\u0622\u0645\u06CC\u0646",
-        "\u0627\u0644\u0633\u0644\u0627\u0645",
-        "\u0627\u0646 \u0634\u0627\u0621 \u0627\u0644\u0644\u06C1",
-        "\u0628\u0631\u0627\u06C1 \u06A9\u0631\u0645",
-        "\u0628\u06C1\u062A\u0631\u06CC\u0646",
-        "\u062C\u06CC",
-        "\u062C\u0648\u0627\u0628",
-        "\u0631\u0627\u0628\u0637\u06C1",
-        "\u0633\u06CC\u0648",
-        "\u0633\u06CC\u0679\u0646\u06AF\u0632",
-        "\u0634\u06A9\u0631\u06CC\u06C1",
-        "\u0633\u062C\u06CC\u0634\u0646",
-        "\u06A9\u0631\u06CC\u06A9\u0634\u0646",
-        "\u06A9\u06CC\u067E\u0686\u0631",
-        "\u06A9\u06CC\u0679\u06CC\u06AF\u0631\u06CC",
-        "\u0641\u06CC\u0686\u0631",
-        "\u0632\u0628\u0627\u0646",
-        "\u0679\u0627\u0626\u067E\u0646\u06AF",
-        "\u06A9\u06CC \u0628\u0648\u0631\u0688",
-        "\u06A9\u0644\u067E \u0628\u0648\u0631\u0688",
-        "\u0645\u06CC\u0633\u062C",
-        "\u0646\u0645\u0628\u0631",
-        "\u0648\u06CC\u0628 \u0633\u0627\u0626\u0679",
-        "\u06A9\u0644",
-      )
-      LayoutMode.AR -> listOf(
-        "\u0627\u0644\u064A\u0648\u0645",
-        "\u0627\u0644\u062D\u0633\u0627\u0628",
-        "\u0627\u0644\u062F\u0641\u0639",
-        "\u0627\u0644\u0631\u0633\u0627\u0644\u0629",
-        "\u0631\u0627\u0628\u0637",
-        "\u0631\u0642\u0645",
-        "\u0634\u0643\u0631\u0627",
-        "\u063A\u062F\u0627",
-        "\u0645\u0648\u0639\u062F",
-        "\u0645\u0646 \u0641\u0636\u0644\u0643",
-        "\u0646\u0639\u0645",
-      )
+    return when (layoutMode) {
+      LayoutMode.EN, LayoutMode.SYMBOLS -> baseDictionaryEn
+      LayoutMode.UR -> baseDictionaryUr
+      LayoutMode.AR -> baseDictionaryAr
     }
+  }
 
-    return (base + learnedWordsForLayout()).distinctBy { it.lowercase() }
+  private fun indexedBaseDictionary(mode: LayoutMode): Map<Char, List<String>> {
+    return when (mode) {
+      LayoutMode.EN, LayoutMode.SYMBOLS -> indexedBaseDictionaryEn
+      LayoutMode.UR -> indexedBaseDictionaryUr
+      LayoutMode.AR -> indexedBaseDictionaryAr
+    }
   }
 
   // Returns cached learned words — never reads DB on main thread.
   // Cache is populated asynchronously in refreshCachedDataAsync().
   private fun learnedWordsForLayout(): List<String> = cachedLearnedWords
 
-  private fun editDistance(first: String, second: String): Int {
+  private fun editDistance(first: String, second: String, maxDistance: Int = 3): Int {
     if (first == second) return 0
-    if (first.isEmpty()) return second.length
-    if (second.isEmpty()) return first.length
+    val len1 = first.length
+    val len2 = second.length
+    if (Math.abs(len1 - len2) > maxDistance) return maxDistance + 1
+    if (len1 == 0) return len2
+    if (len2 == 0) return len1
 
-    val previous = IntArray(second.length + 1) { it }
-    val current = IntArray(second.length + 1)
+    var previous = IntArray(len2 + 1) { it }
+    var current = IntArray(len2 + 1)
 
-    for (i in first.indices) {
+    for (i in 0 until len1) {
       current[0] = i + 1
-      for (j in second.indices) {
+      var minInRow = current[0]
+      for (j in 0 until len2) {
         val cost = if (first[i] == second[j]) 0 else 1
         current[j + 1] = minOf(
           current[j] + 1,
           previous[j + 1] + 1,
           previous[j + 1] + cost,
         )
+        if (current[j + 1] < minInRow) minInRow = current[j + 1]
       }
-      for (j in previous.indices) previous[j] = current[j]
+      if (minInRow > maxDistance) return maxDistance + 1
+      val temp = previous
+      previous = current
+      current = temp
     }
 
-    return previous[second.length]
+    return previous[len2]
+  }
+
+  companion object {
+    private val topRowNumberAlternatesMapUr = listOf("ض", "ص", "غ", "ڑ", "ٹ", "ث", "ح", "ئ", "ظ", "ط")
+      .zip(listOf(
+        listOf("1", "\u06F1"), listOf("2", "\u06F2"), listOf("3", "\u06F3"), listOf("4", "\u06F4"), listOf("5", "\u06F5"),
+        listOf("6", "\u06F6"), listOf("7", "\u06F7"), listOf("8", "\u06F8"), listOf("9", "\u06F9"), listOf("0", "\u06F0")
+      ))
+      .toMap()
+
+    private val topRowNumberAlternatesMapAr = listOf("ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ج")
+      .zip(listOf(
+        listOf("1", "\u0661"), listOf("2", "\u0662"), listOf("3", "\u0663"), listOf("4", "\u0664"), listOf("5", "\u0665"),
+        listOf("6", "\u0666"), listOf("7", "\u0667"), listOf("8", "\u0668"), listOf("9", "\u0669"), listOf("0", "\u0660")
+      ))
+      .toMap()
+
+    private val englishAlternatesMap = mapOf(
+      "a" to listOf("@", "\u00E1", "\u00E0"),
+      "e" to listOf("\u00E9", "\u00E8"),
+      "i" to listOf("\u00ED", "\u00EC"),
+      "o" to listOf("\u00F3", "\u00F2"),
+      "u" to listOf("\u00FA", "\u00F9"),
+      "." to listOf(",", "?", "!"),
+      "," to listOf("emoji"),
+    )
+
+    private val urduAlternatesMap = mapOf(
+      "urdu_comma" to listOf("emoji"),
+      "urdu_period" to listOf("do_zer", "do_pesh", "khari_zabar", "khari_zer", "ulta_pesh", "maddah", "hamza_above", "zabar", "zer", "pesh", "sukun", "shadda", "do_zabar", "urdu_qmark", "!"),
+      "urdu_qmark" to listOf("!", "zabar", "zer", "pesh", "sukun", "shadda", "do_zabar", "do_zer", "do_pesh"),
+      "\u0627" to listOf("\u0622", "\u0623", "\u0625"),
+      "\u0628" to listOf("\u067E"),
+      "\u062A" to listOf("\u0679", "\u062B"),
+      "\u062C" to listOf("\u0686"),
+      "\u062D" to listOf("\u062E"),
+      "\u062F" to listOf("\u0688", "\u0630"),
+      "\u0631" to listOf("\u0691"),
+      "\u0632" to listOf("\u0698"),
+      "\u0633" to listOf("\u0634", "\u0635"),
+      "\u0637" to listOf("0", "\u06F0"),
+      "\u06A9" to listOf("\u06AF", "\u0643"),
+      "\u0646" to listOf("\u06BA"),
+      "\u06C1" to listOf("\u06BE", "\u06C2", "\u06C3", "\u0629"),
+      "\u0621" to listOf("\u0654", "\u0624", "\u0626"),
+      "\u0648" to listOf("\u0624"),
+      "\u06CC" to listOf("\u0626", "\u06D2", "\u064A"),
+      "\u06D2" to listOf("\u0626\u06D2", "\u0626", "\u06CC"),
+      "\u0644" to listOf("\u0644\u0627"),
+    )
+
+    private val arabicAlternatesMap = mapOf(
+      "urdu_comma" to listOf("emoji"),
+      "urdu_period" to listOf("urdu_qmark", "!", "zabar", "zer", "pesh", "sukun", "shadda", "do_zabar", "do_zer", "do_pesh"),
+      "urdu_qmark" to listOf("!", "zabar", "zer", "pesh", "sukun", "shadda"),
+      "\u0627" to listOf("\u0623", "\u0625", "\u0622"),
+      "\u062A" to listOf("\u062B", "\u0629"),
+      "\u062D" to listOf("\u062E"),
+      "\u062F" to listOf("\u0630"),
+      "\u0633" to listOf("\u0634", "\u0635"),
+      "\u0637" to listOf("\u0638"),
+      "\u0647" to listOf("\u0629"),
+      "\u0621" to listOf("\u0654", "\u0624", "\u0626"),
+      "\u0648" to listOf("\u0624"),
+      "\u064A" to listOf("\u0649", "\u0626"),
+      "\u0644" to listOf("\u0644\u0627"),
+    )
+
+    private val baseDictionaryEn = listOf(
+      "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
+      "this", "but", "his", "by", "from", "they", "we", "say", "her", "she", "or", "an", "will", "my", "one", "all", "would", "there",
+      "their", "what", "so", "up", "out", "if", "about", "who", "get", "which", "go", "me", "when", "make", "can", "like", "time", "no",
+      "just", "him", "know", "take", "people", "into", "year", "your", "good", "some", "could", "them", "see", "other", "than", "then",
+      "now", "look", "only", "come", "its", "over", "think", "also", "back", "after", "use", "two", "how", "our", "work", "first",
+      "well", "way", "even", "new", "want", "because", "any", "these", "give", "day", "most", "us", "is", "are", "was", "were", "been",
+      "being", "doing", "did", "does", "hello", "hi", "hey", "thanks", "thank", "please", "sorry", "welcome",
+      "yes", "yeah", "ok", "okay", "fine", "great", "awesome", "perfect", "morning", "night", "evening", "afternoon", "today",
+      "tomorrow", "yesterday", "later", "soon", "always", "never", "sometimes", "maybe", "sure", "really", "very", "much", "more",
+      "many", "few", "little", "big", "small", "long", "short", "high", "low", "old", "young", "next", "last", "right", "left",
+      "true", "false", "happy", "sad", "love", "need", "help", "send", "call", "text", "message", "email", "chat",
+      "meet", "talk", "hear", "listen", "read", "write", "type", "keyboard", "phone", "mobile", "app", "application",
+      "device", "system", "setting", "settings", "option", "account", "profile", "user", "name", "password", "security", "privacy",
+      "data", "file", "folder", "document", "image", "photo", "video", "audio", "music", "song", "link", "url", "website", "code",
+      "project", "job", "business", "company", "office", "team", "client", "customer", "service", "support",
+      "order", "payment", "money", "price", "cost", "total", "amount", "number", "card", "bank", "check", "confirm", "done",
+      "complete", "finish", "start", "begin", "stop", "cancel", "delete", "remove", "save", "share", "copy", "paste", "clipboard",
+      "vault", "clipvault", "mindcrafts", "google", "android", "ios", "update", "version", "download", "upload", "install",
+      "beautiful", "important", "available", "appointment", "details", "dashboard", "feature", "professional", "automatic",
+      "correction", "suggestion", "language"
+    )
+
+    private val baseDictionaryUr = listOf(
+      "\u0622\u062C", "\u0622\u067E", "\u0622\u0645\u06CC\u0646", "\u0627\u0644\u0633\u0644\u0627\u0645", "\u0627\u0646 \u0634\u0627\u0621 \u0627\u0644\u0644\u06C1",
+      "\u0628\u0631\u0627\u06C1 \u06A9\u0631\u0645", "\u0628\u06C1\u062A\u0631\u06CC\u0646", "\u062C\u06CC", "\u062C\u0648\u0627\u0628",
+      "\u0631\u0627\u0628\u0637\u06C1", "\u0633\u06CC\u0648", "\u0633\u06CC\u0679\u0646\u06AF\u0632", "\u0634\u06A9\u0631\u06CC\u06C1",
+      "\u0633\u062C\u06CC\u0634\u0646", "\u06A9\u0631\u06CC\u06A9\u0634\u0646", "\u06A9\u06CC\u067E\u0686\u0631", "\u06A9\u06CC\u0679\u06CC\u06AF\u0631\u06CC",
+      "\u0641\u06CC\u0686\u0631", "\u0632\u0628\u0627\u0646", "\u0679\u0627\u0626\u067E\u0646\u06AF", "\u06A9\u06CC \u0628\u0648\u0631\u0688",
+      "\u06A9\u0644\u067E \u0628\u0648\u0631\u0688", "\u0645\u06CC\u0633\u062C", "\u0646\u0645\u0628\u0631", "\u0648\u06CC\u0628 \u0633\u0627\u0626\u0679",
+      "\u06A9\u0644", "\u06A9\u06CC\u0627", "\u06A9\u06CC\u0648\u06BA", "\u06A9\u0628", "\u06A9\u06C1\u0627\u06BA", "\u06A9\u06CC\u0633\u06D2",
+      "\u06A9\u0648\u0646", "\u06A9\u0686\u06BE", "\u0633\u0628", "\u0628\u06C1\u062A", "\u0632\u06CC\u0627\u062F\u06C1", "\u06A9\u0645",
+      "\u0627\u0686\u06BE\u0627", "\u0628\u0631\u0627", "\u06C1\u0627\u06BA", "\u0646\u06C1\u06CC\u06BA", "\u062E\u062F\u0627",
+      "\u0627\u0644\u0644\u06C1", "\u062D\u0627\u0641\u0638", "\u062E\u06CC\u0631\u06CC\u062A", "\u06A9\u0627\u0645", "\u0648\u0642\u062A",
+      "\u062F\u0646", "\u0631\u0627\u062A", "\u0635\u0628\u062D", "\u0634\u0627\u0645", "\u06AF\u06BE\u0631", "\u062F\u0641\u062A\u0631",
+      "\u062F\u0648\u0633\u062A", "\u0628\u06BE\u0627\u0626\u06CC", "\u0628\u06C1\u0646", "\u0627\u0628\u0648", "\u0627\u0645\u06CC",
+      "\u062E\u0627\u0646\u062F\u0627\u0646", "\u067E\u06CC\u0627\u0631", "\u062E\u0648\u0634", "\u063A\u0645", "\u062F\u0644",
+      "\u0628\u0627\u062A", "\u0633\u0648\u0686", "\u0633\u0645\u062C\u06BE", "\u0639\u0644\u0645", "\u067E\u0691\u06BE\u0646\u0627",
+      "\u0644\u06A9\u06BE\u0646\u0627", "\u0633\u0646\u0646\u0627", "\u062F\u06CC\u06A9\u06BE\u0646\u0627", "\u062C\u0627\u0646\u0627",
+      "\u0622\u0646\u0627", "\u062E\u0631\u06CC\u062F\u0646\u0627", "\u0628\u06CC\u0686\u0646\u0627", "\u067E\u06CC\u0633\u06D2",
+      "\u0642\u06CC\u0645\u062A", "\u0645\u062F\u062F", "\u0636\u0631\u0648\u0631\u062A", "\u0627\u06C1\u0645", "\u067E\u06C1\u0644\u06D2",
+      "\u0628\u0639\u062F", "\u0633\u0627\u0620\u062A", "\u0645\u0646\u0679", "\u06AF\u06BE\u0646\u0679\u06C1", "\u06C1\u0641\u062A\u06C1",
+      "\u0645\u06C1\u06CC\u0646\u06C1", "\u0633\u0627\u0644", "\u0627\u0644\u062D\u0645\u062F\u0644\u0644\u06C1", "\u0633\u0628\u062D\u0627\u0646 \u0627\u0644\u0644\u06C1",
+      "\u062C\u0632\u0627\u06A9 \u0627\u0644\u0644\u06C1", "\u062E\u0648\u0634 \u0622\u0645\u062F\u06CC\u062F", "\u0645\u06C1\u0631\u0628\u0627\u0646\u06CC"
+    )
+
+    private val baseDictionaryAr = listOf(
+      "\u0627\u0644\u064A\u0648\u0645", "\u0627\u0644\u062D\u0633\u0627\u0628", "\u0627\u0644\u062F\u0641\u0639",
+      "\u0627\u0644\u0631\u0633\u0627\u0644\u0629", "\u0631\u0627\u0628\u0637", "\u0631\u0642\u0645",
+      "\u0634\u0643\u0631\u0627", "\u063A\u062F\u0627", "\u0645\u0648\u0639\u062F", "\u0645\u0646 \u0641\u0636\u0644\u0643", "\u0646\u0639\u0645"
+    )
+
+    private val indexedBaseDictionaryEn = baseDictionaryEn.groupBy { it[0].lowercaseChar() }
+    private val indexedBaseDictionaryUr = baseDictionaryUr.groupBy { it[0] }
+    private val indexedBaseDictionaryAr = baseDictionaryAr.groupBy { it[0] }
+
+    private val englishCommonCorrections = mapOf(
+      "teh" to "the", "adn" to "and", "dont" to "don't", "cant" to "can't", "wont" to "won't",
+      "isnt" to "isn't", "arent" to "aren't", "havent" to "haven't", "hasnt" to "hasn't",
+      "wouldnt" to "wouldn't", "couldnt" to "couldn't", "shouldnt" to "shouldn't",
+      "im" to "I'm", "youre" to "you're", "theyre" to "they're", "weve" to "we've",
+      "didnt" to "didn't", "doesnt" to "doesn't", "wasnt" to "wasn't", "werent" to "weren't",
+      "ill" to "I'll", "youll" to "you'll", "theyll" to "they'll", "well" to "we'll",
+      "idk" to "I don't know", "btw" to "by the way", "pls" to "please", "plz" to "please",
+      "thx" to "thanks", "ty" to "thank you", "omg" to "Oh my God", "rly" to "really",
+      "alot" to "a lot", "tothe" to "to the", "inther" to "in the", "brb" to "be right back",
+      "asap" to "as soon as possible", "definately" to "definitely", "seperate" to "separate",
+      "tomo" to "tomorrow", "nxt" to "next", "abt" to "about", "msg" to "message",
+      "txt" to "text", "pic" to "picture", "phn" to "phone", "sec" to "second",
+      "min" to "minute", "yr" to "year", "bday" to "birthday", "recieve" to "receive",
+      "adress" to "address", "mesage" to "message", "setings" to "settings",
+      "clipbord" to "clipboard", "keybord" to "keyboard", "whatsapp" to "WhatsApp",
+      "mindcrafts" to "MindCrafts_AI", "codehub" to "codehubb"
+    )
+
+    private val urduCommonCorrections = mapOf(
+      "\u0627\u0645\u06CC\u0646" to "\u0622\u0645\u06CC\u0646",
+      "\u0627\u067E" to "\u0622\u067E",
+      "\u0627\u062C" to "\u0622\u062C",
+      "\u0627\u0648\u0627\u0632" to "\u0622\u0648\u0627\u0632",
+      "\u0627\u0633\u0627\u0646" to "\u0622\u0633\u0627\u0646",
+      "\u0627\u0632\u0627\u062F" to "\u0622\u0632\u0627\u062F",
+      "\u0634\u06A9\u0631\u06CC\u0627" to "\u0634\u06A9\u0631\u06CC\u06C1",
+      "\u0634\u06A9\u0631\u0626\u06CC\u06C1" to "\u0634\u06A9\u0631\u06CC\u06C1",
+      "\u0627\u0646\u0634\u0627\u0621\u0627\u0644\u0644\u06C1" to "\u0627\u0646 \u0634\u0627\u0621 \u0627\u0644\u0644\u06C1",
+      "\u0627\u0646\u0634\u0627\u0621 \u0627\u0644\u0644\u06C1" to "\u0627\u0646 \u0634\u0627\u0621 \u0627\u0644\u0644\u06C1",
+      "\u0627\u0633\u0644\u0627\u0645 \u0639\u0644\u06CC\u06A9\u0645" to "\u0627\u0644\u0633\u0644\u0627\u0645 \u0639\u0644\u06CC\u06A9\u0645",
+      "\u0627\u0633\u0644\u0627\u0645\u0639\u0644\u06CC\u06A9\u0645" to "\u0627\u0644\u0633\u0644\u0627\u0645 \u0639\u0644\u06CC\u06A9\u0645",
+      "\u0645\u06CC\u0647\u0631\u0628\u0627\u0646\u06CC" to "\u0645\u06C1\u0631\u0628\u0627\u0646\u06CC"
+    )
   }
 
   private fun applySelectedTheme(value: String) {
@@ -2515,14 +4640,21 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     refreshKeyboard()
   }
 
-  private fun triggerVibration() {
+  private fun triggerVibration(view: View? = null) {
+    if (!hapticsEnabled) return
     try {
-      val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
+      if (view != null) {
+        val ok = view.performHapticFeedback(
+          android.view.HapticFeedbackConstants.KEYBOARD_TAP,
+          android.view.HapticFeedbackConstants.FLAG_IGNORE_GLOBAL_SETTING
+        )
+        if (ok) return
+      }
       if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-        vibrator.vibrate(android.os.VibrationEffect.createOneShot(15, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+        vibrator?.vibrate(android.os.VibrationEffect.createOneShot(4, 45))
       } else {
         @Suppress("DEPRECATION")
-        vibrator.vibrate(15)
+        vibrator?.vibrate(4)
       }
     } catch(e: Exception) {}
   }
@@ -2564,16 +4696,12 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   }
 
   private fun voiceIntent(): Intent {
-    return Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-      putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-      putExtra(RecognizerIntent.EXTRA_LANGUAGE, layoutMode.voiceLocale)
-      putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, layoutMode.voiceLocale)
-      putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-      putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-      putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, packageName)
-      putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
-      putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 3000)
-    }
+    val forceOffline = com.clipvault.mobile.keyboard.OfflineSpeechEngine.isOfflinePreferred(this)
+    return com.clipvault.mobile.keyboard.OfflineSpeechEngine.createVoiceIntent(
+      packageName,
+      layoutMode.voiceLocale,
+      forceOffline
+    )
   }
 
   private fun startVoiceSession(message: String) {
@@ -2660,9 +4788,12 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       }
 
       override fun onResults(results: Bundle?) {
-        val spokenText = results
+        val rawText = results
           ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
           ?.firstOrNull()?.trim().orEmpty()
+
+        val isUrdu = layoutMode == LayoutMode.UR || layoutMode == LayoutMode.AR
+        val spokenText = com.clipvault.mobile.keyboard.OfflineSpeechEngine.normalizeOfflineText(rawText, isUrdu)
 
         if (spokenText.isNotBlank()) {
           commitVoiceFinal(spokenText)
@@ -2906,7 +5037,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
         updateStatus("Inserted line break (pause)")
       }
     }
-    repeatHandler.postDelayed(voiceLineBreakRunnable!!, 3000L)
+    repeatHandler.postDelayed(voiceLineBreakRunnable!!, 5000L)
   }
 
   private fun stopVoiceLineBreakTimer() {
@@ -2959,6 +5090,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   }
 
   private fun captureClipboard() {
+    if (isIncognitoMode) return
     try {
       val text = readClipboardText().trim()
       if (text.isBlank() || text == lastClipContent) return
@@ -2967,6 +5099,22 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       if (NativeClipStore.save(this, text)) {
         savedCount += 1
         updateStatus("$savedCount clips saved")
+
+        // ── Real-time clips panel refresh ──────────────────────────────────────
+        // Update cached clips immediately so the panel shows the new clip at once.
+        // We use the background executor to avoid blocking the main thread.
+        backgroundExecutor.execute {
+          val updatedClips = NativeClipStore.recent(this, 100)
+          val updatedFavs  = NativeClipStore.favorites(this, 30)
+          mainHandler.post {
+            cachedRecentClips    = updatedClips.take(100)
+            cachedFavoriteClips  = updatedFavs
+            // Refresh the clips panel immediately if it is currently visible
+            if (panelMode == PanelMode.CLIPS) {
+              refreshKeyboard()
+            }
+          }
+        }
       }
     } catch (e: Exception) {
       // Prevent clipboard manager or DB exceptions from crashing the service
@@ -2987,7 +5135,7 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
 
   private fun updateStatus(message: String) {
     statusMessage = message
-    // statusView?.text = statusText()
+    voiceOverlayTextRef?.text = message
   }
 
   private fun statusText(): String {
@@ -3054,14 +5202,14 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     }
     // Fallback if missing
     return ThemeColors(
-      background = Color.rgb(27, 27, 32),
-      surface = Color.rgb(34, 35, 41),
-      key = Color.rgb(55, 56, 64),
-      specialKey = Color.rgb(74, 83, 107),
-      text = Color.rgb(240, 242, 247),
-      muted = Color.rgb(170, 174, 186),
-      accent = Color.rgb(231, 236, 255),
-      stroke = Color.rgb(60, 61, 70),
+      background = Color.parseColor("#080810"),
+      surface = Color.parseColor("#0d0d1a"),
+      key = Color.parseColor("#181828"),
+      specialKey = Color.parseColor("#222238"),
+      text = Color.parseColor("#e2e2f0"),
+      muted = Color.parseColor("#757599"),
+      accent = Color.parseColor("#6366f1"),
+      stroke = Color.parseColor("#262640"),
       radius = 8,
       elevation = dp(1).toFloat(),
     )
@@ -3115,6 +5263,9 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     keyboardHeightScale = prefs.getFloat("keyboardHeightScale", 1.0f).coerceIn(0.84f, 1.22f)
     keyTextScale = prefs.getFloat("keyTextScale", 1.0f).coerceIn(0.88f, 1.18f)
     hapticsEnabled = prefs.getBoolean("hapticsEnabled", true)
+    autoCorrectEnabled = prefs.getBoolean("autoCorrectEnabled", true)
+    doubleSpacePeriodEnabled = prefs.getBoolean("doubleSpacePeriodEnabled", true)
+    systemThemeAutoFollow = prefs.getBoolean("systemThemeAutoFollow", true)
 
     loadRejectedCorrections()  // restore learned correction rejections
   }
@@ -3129,6 +5280,9 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
       .putFloat("keyboardHeightScale", keyboardHeightScale)
       .putFloat("keyTextScale", keyTextScale)
       .putBoolean("hapticsEnabled", hapticsEnabled)
+      .putBoolean("autoCorrectEnabled", autoCorrectEnabled)
+      .putBoolean("doubleSpacePeriodEnabled", doubleSpacePeriodEnabled)
+      .putBoolean("systemThemeAutoFollow", systemThemeAutoFollow)
       .apply()
   }
 
@@ -3141,14 +5295,16 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
     val now = System.currentTimeMillis()
 
     backgroundExecutor.execute {
-      // 1. Always fetch recent clips instantly without throttling
-      val clips = NativeClipStore.recent(this, 80)
-      
-      mainHandler.post { 
-        cachedRecentClips = clips.take(10)
+      // 1. Always fetch recent + favorites clips instantly without throttling
+      val clips = NativeClipStore.recent(this, 100)
+      val favs = NativeClipStore.favorites(this, 30)
+
+      mainHandler.post {
+        cachedRecentClips = clips.take(100)
+        cachedFavoriteClips = favs
         // Auto-refresh UI if clipboard panel is currently active
         if (panelMode == PanelMode.CLIPS) {
-           refreshKeyboard()
+          refreshKeyboard()
         }
       }
 
@@ -3176,10 +5332,20 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
           } ?: entry.key
         }
         .take(90)
+        
+      val pd = try {
+        val prefs = getSharedPreferences("clipvault_personal_dict", android.content.Context.MODE_PRIVATE)
+        prefs.all.mapNotNull { entry ->
+          val count = entry.value as? Int ?: 0
+          if (count >= 2) entry.key else null
+        }
+      } catch (e: Exception) { emptyList() }
 
       mainHandler.post {
-        cachedRecentClips = clips.take(10)
+        cachedRecentClips = clips.take(100)
+        cachedFavoriteClips = favs
         cachedLearnedWords = learned
+        cachedPersonalDictionary = pd
       }
     }
   }
@@ -3226,9 +5392,9 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   private fun startVoiceAutoStopTimer() {
     stopVoiceAutoStopTimer()
     voiceAutoStopRunnable = Runnable {
-      if (isListening) finishVoiceTyping("mic off (10s)")
+      if (isListening) finishVoiceTyping("mic off (15s)")
     }
-    mainHandler.postDelayed(voiceAutoStopRunnable!!, 10000L)
+    mainHandler.postDelayed(voiceAutoStopRunnable!!, 15000L)
   }
 
   private fun stopVoiceAutoStopTimer() {
@@ -3254,105 +5420,11 @@ class ClipVaultKeyboardService : InputMethodService(), SpellCheckerSession.Spell
   }
 
   // ── Emoji categories ──────────────────────────────────────────────────────────
-  private fun emojiCategories(): List<EmojiCategory> = listOf(
-    EmojiCategory("\uD83D\uDE00", listOf( // Smileys & Emotion
-      "\uD83D\uDE00", "\uD83D\uDE03", "\uD83D\uDE04", "\uD83D\uDE01", "\uD83D\uDE06", "\uD83D\uDE05", "\uD83E\uDD23", "\uD83D\uDE02",
-      "\uD83D\uDE42", "\uD83D\uDE43", "\uD83D\uDE09", "\uD83D\uDE0A", "\uD83D\uDE07", "\uD83E\uDD70", "\uD83D\uDE0D", "\uD83E\uDD29",
-      "\uD83D\uDE18", "\uD83D\uDE17", "\u263A\uFE0F", "\uD83D\uDE1A", "\uD83D\uDE19", "\uD83E\uDD72", "\uD83D\uDE0B", "\uD83D\uDE1B",
-      "\uD83D\uDE1C", "\uD83E\uDD2A", "\uD83D\uDE1D", "\uD83E\uDD11", "\uD83E\uDD17", "\uD83E\uDD2D", "\uD83E\uDEE2", "\uD83E\uDEE3",
-      "\uD83E\uDD14", "\uD83E\uDEE1", "\uD83E\uDD10", "\uD83E\uDD28", "\uD83D\uDE10", "\uD83D\uDE11", "\uD83D\uDE36", "\uD83D\uDE0F",
-      "\uD83D\uDE12", "\uD83D\uDE44", "\uD83D\uDE2C", "\uD83E\uDD25", "\uD83D\uDE0C", "\uD83D\uDE14", "\uD83D\uDE2A", "\uD83E\uDD24",
-      "\uD83D\uDE34", "\uD83D\uDE37", "\uD83E\uDD12", "\uD83E\uDD15", "\uD83E\uDD27", "\uD83E\uDD2E", "\uD83E\uDD22", "\uD83E\uDD2F",
-      "\uD83E\uDD20", "\uD83E\uDD73", "\uD83E\uDD78", "\uD83D\uDE0E", "\uD83E\uDD13", "\uD83E\uDDD0", "\uD83D\uDE15", "\uD83E\uDEE4",
-      "\uD83D\uDE1F", "\uD83D\uDE2E", "\uD83D\uDE2F", "\uD83D\uDE32", "\uD83D\uDE33", "\uD83E\uDD7A", "\uD83E\uDD79", "\uD83D\uDC7F",
-      "\uD83D\uDC80", "\uD83D\uDC79", "\uD83D\uDC7E", "\uD83E\uDDD9", "\uD83E\uDDDF", "\uD83E\uDDDB", "\uD83D\uDE08", "\uD83D\uDC80",
-      "\uD83D\uDE31", "\uD83D\uDE16", "\uD83D\uDE23", "\uD83D\uDE1E", "\uD83D\uDE13", "\uD83D\uDE29", "\uD83D\uDE2B", "\uD83E\uDD71",
-      "\uD83D\uDE24", "\uD83D\uDE21", "\uD83D\uDE20", "\uD83E\uDD2C", "\uD83D\uDC7D", "\uD83D\uDC7C", "\uD83C\uDF83", "\uD83D\uDC7B",
-      "\uD83D\uDE35", "\uD83D\uDE36", "\uD83D\uDE30", "\uD83D\uDE32", "\uD83D\uDE33", "\uD83D\uDE37", "\uD83E\uDD12", "\uD83E\uDD15",
-      "\uD83E\uDEE0", "\uD83E\uDEE1", "\uD83E\uDEE2", "\uD83E\uDEE3", "\uD83E\uDEE5", "\uD83D\uDC79", "\uD83D\uDC7A", "\uD83D\uDC7F",
-      "\uD83D\uDC8B", "\uD83D\uDC8C", "\uD83D\uDC8D", "\uD83D\uDC8E", "\uD83D\uDC8F", "\uD83D\uDC90", "\uD83D\uDC91", "\uD83D\uDC92"
-    )),
-    EmojiCategory("\u2764\uFE0F", listOf( // Hearts, Love & Gestures
-      "\u2764\uFE0F", "\uD83E\uDDE1", "\uD83D\uDC9B", "\uD83D\uDC9A", "\uD83D\uDC99", "\uD83D\uDC9C", "\uD83E\uDD0E", "\uD83D\uDDA4",
-      "\uD83E\uDD0D", "\uD83D\uDC94", "\u2763\uFE0F", "\uD83D\uDCAF", "\uD83D\uDCA2", "\uD83D\uDCA5", "\uD83D\uDCAB", "\uD83D\uDCA6",
-      "\uD83D\uDCA8", "\uD83D\uDCA3", "\uD83D\uDCAC", "\uD83D\uDDE8\uFE0F", "\uD83D\uDDEF\uFE0F", "\uD83D\uDCA4", "\uD83C\uDF1F",
-      "\u2728", "\u26A1", "\uD83D\uDD25", "\uD83C\uDF08", "\u2600\uFE0F", "\uD83C\uDF19", "\u2B50", "\uD83D\uDC4B", "\uD83E\uDD1A",
-      "\uD83D\uDD90\uFE0F", "\u270B", "\uD83D\uDD96", "\uD83D\uDC4C", "\uD83E\uDD0C", "\uD83E\uDD0F", "\u270C\uFE0F", "\uD83E\uDD1E",
-      "\uD83E\uDEE0", "\uD83E\uDD1F", "\uD83E\uDD18", "\uD83E\uDD19", "\uD83D\uDC48", "\uD83D\uDC49", "\uD83D\uDC46", "\uD83D\uDC47",
-      "\u261D\uFE0F", "\uD83D\uDC4D", "\uD83D\uDC4E", "\u270A", "\uD83D\uDC4A", "\uD83E\uDD1B", "\uD83E\uDD1C", "\uD83D\uDC4F",
-      "\uD83E\uDEB6", "\uD83D\uDE4C", "\uD83E\uDD32", "\uD83D\uDE4F", "\u270D\uFE0F", "\uD83D\uDC85", "\uD83D\uDC8B", "\uD83D\uDC8F",
-      "\uD83D\uDC6A", "\uD83D\uDC8B", "\uD83D\uDC69\u200D\u2764\uFE0F\u200D\uD83D\uDC8B\u200D\uD83D\uDC68", "\uD83D\uDC9E", "\uD83D\uDC93", "\uD83D\uDC97",
-      "\uD83D\uDC9C", "\uD83D\uDC9D", "\uD83D\uDC9F", "\uD83D\uDC8C", "\uD83D\uDC85", "\uD83D\uDC66", "\uD83D\uDC67", "\uD83E\uDDD1",
-      "\uD83E\uDD1D", "\uD83E\uDFAF", "\uD83E\uDFB0", "\uD83D\uDCAA", "\uD83D\uDC42", "\uD83D\uDC43", "\uD83D\uDC41", "\uD83D\uDC40"
-    )),
-    EmojiCategory("\uD83D\uDC36", listOf( // Animals & Nature
-      "\uD83D\uDC36", "\uD83D\uDC31", "\uD83D\uDC2D", "\uD83D\uDC39", "\uD83D\uDC30", "\uD83E\uDD8A", "\uD83D\uDC3B", "\uD83D\uDC3C",
-      "\uD83D\uDC28", "\uD83D\uDC2F", "\uD83E\uDD81", "\uD83D\uDC2E", "\uD83D\uDC37", "\uD83D\uDC38", "\uD83D\uDC35", "\uD83D\uDE48",
-      "\uD83D\uDE49", "\uD83D\uDE4A", "\uD83D\uDC14", "\uD83D\uDC27", "\uD83D\uDC26", "\uD83E\uDD86", "\uD83E\uDD85", "\uD83E\uDD89",
-      "\uD83E\uDD87", "\uD83D\uDC3A", "\uD83D\uDC17", "\uD83D\uDC34", "\uD83E\uDD84", "\uD83D\uDC1D", "\uD83E\uDD8B", "\uD83D\uDC1E",
-      "\uD83D\uDC0C", "\uD83D\uDC1C", "\uD83D\uDC22", "\uD83D\uDC0D", "\uD83E\uDD8E", "\uD83D\uDC19", "\uD83E\uDD91", "\uD83E\uDD90",
-      "\uD83D\uDC1F", "\uD83D\uDC2C", "\uD83E\uDD95", "\uD83E\uDD96", "\uD83E\uDD9F", "\uD83E\uDEB2", "\uD83E\uDEB3", "\uD83E\uDEB0",
-      "\uD83C\uDF32", "\uD83C\uDF33", "\uD83C\uDF34", "\uD83C\uDF35", "\uD83C\uDF3E", "\uD83C\uDF3F", "\uD83C\uDF40", "\uD83C\uDF41",
-      "\uD83C\uDF39", "\uD83C\uDF3B", "\uD83C\uDF38", "\uD83C\uDF31", "\uD83C\uDF37", "\uD83C\uDF42", "\uD83C\uDF43", "\uD83C\uDF0B",
-      "\uD83C\uDF0A", "\uD83C\uDF44", "\uD83C\uDF3C", "\uD83C\uDF3A", "\uD83E\uDD8F", "\uD83E\uDD94", "\uD83E\uDD9C", "\uD83E\uDDB9",
-      "\uD83E\uDD8C", "\uD83E\uDD87", "\uD83E\uDD99", "\uD83E\uDDBE", "\uD83E\uDDB5", "\uD83E\uDD9B", "\uD83E\uDD92", "\uD83E\uDD93"
-    )),
-    EmojiCategory("\uD83C\uDF4E", listOf( // Food & Drink
-      "\uD83C\uDF4F", "\uD83C\uDF4E", "\uD83C\uDF50", "\uD83C\uDF4A", "\uD83C\uDF4B", "\uD83C\uDF4C", "\uD83C\uDF49", "\uD83C\uDF47",
-      "\uD83C\uDF53", "\uD83E\uDED0", "\uD83C\uDF48", "\uD83C\uDF52", "\uD83C\uDF51", "\uD83E\uDD6D", "\uD83C\uDF4D", "\uD83E\uDD65",
-      "\uD83E\uDD5D", "\uD83C\uDF45", "\uD83E\uDD51", "\uD83E\uDD66", "\uD83E\uDD52", "\uD83C\uDF36\uFE0F", "\uD83E\uDED1", "\uD83C\uDF3D",
-      "\uD83E\uDD55", "\uD83E\uDED2", "\uD83C\uDF5E", "\uD83E\uDD50", "\uD83E\uDD56", "\uD83E\uDD68", "\uD83E\uDD6F", "\uD83E\uDD5E",
-      "\uD83C\uDF54", "\uD83C\uDF5F", "\uD83C\uDF55", "\uD83C\uDF2D", "\uD83E\uDD6A", "\uD83C\uDF2E", "\uD83C\uDF2F", "\uD83E\uDED4",
-      "\uD83E\uDD57", "\uD83E\uDD58", "\uD83C\uDF5D", "\uD83C\uDF5C", "\uD83C\uDF72", "\uD83C\uDF5B", "\uD83C\uDF63", "\uD83C\uDF71",
-      "\uD83E\uDD5F", "\uD83E\uDD60", "\uD83C\uDF66", "\uD83C\uDF67", "\uD83C\uDF70", "\uD83C\uDF82", "\uD83E\uDDC1", "\uD83C\uDF6B",
-      "\u2615", "\uD83E\uDD64", "\uD83E\uDDC3", "\uD83C\uDF7A", "\uD83C\uDF77", "\uD83E\uDD42", "\uD83C\uDF79", "\uD83E\uDDC9",
-      "\uD83E\uDD59", "\uD83E\uDDC2", "\uD83E\uDDC7", "\uD83E\uDDCB", "\uD83E\uDD61", "\uD83E\uDD5E", "\uD83E\uDD83", "\uD83E\uDD5C",
-      "\uD83C\uDF75", "\uD83C\uDF76", "\uD83C\uDF78", "\uD83C\uDF7B", "\uD83C\uDF7C", "\uD83C\uDF7D", "\uD83C\uDF7E", "\uD83E\uDD69",
-      "\uD83E\uDED6", "\uD83E\uDED2", "\uD83E\uDD6C", "\uD83E\uDDCA", "\uD83E\uDDC8", "\uD83E\uDDC9", "\uD83E\uDD5B", "\uD83E\uDD64"
-    )),
-    EmojiCategory("\u26BD", listOf( // Sports & Activities
-      "\u26BD", "\uD83C\uDFC0", "\uD83C\uDFC8", "\u26BE", "\uD83C\uDFBE", "\uD83C\uDFB1", "\uD83C\uDFB3", "\uD83C\uDFAF",
-      "\uD83C\uDFC6", "\uD83E\uDD47", "\uD83E\uDD48", "\uD83E\uDD49", "\uD83C\uDFC5", "\uD83C\uDF96\uFE0F", "\uD83C\uDFAE", "\uD83C\uDFB9",
-      "\uD83C\uDFA8", "\uD83C\uDFAD", "\uD83C\uDFB8", "\uD83C\uDFA4", "\uD83C\uDFA7", "\uD83C\uDFBC", "\uD83C\uDFB5", "\uD83C\uDFB6",
-      "\uD83C\uDFAB", "\uD83C\uDF9F\uFE0F", "\uD83C\uDF97\uFE0F", "\uD83C\uDF9E\uFE0F", "\uD83D\uDCF8", "\uD83D\uDCF9", "\uD83D\uDCFA", "\uD83D\uDCBB",
-      "\uD83E\uDD4B", "\uD83E\uDD4C", "\uD83E\uDD4D", "\uD83E\uDE80", "\uD83E\uDE81", "\uD83E\uDE82", "\uD83D\uDEF9", "\uD83D\uDED6",
-      "\uD83C\uDFF9", "\uD83C\uDFFB", "\uD83E\uDE85", "\uD83E\uDE86", "\uD83D\uDCFE", "\uD83C\uDFB0", "\uD83C\uDFB2", "\uD83D\uDC05",
-      "\uD83C\uDCCF", "\uD83E\uDD69", "\uD83E\uDDB8", "\uD83E\uDDB9", "\uD83E\uDDD7", "\uD83E\uDDD8", "\uD83E\uDDDC", "\uD83E\uDDDD",
-      "\uD83C\uDFC2", "\uD83C\uDFC7", "\uD83C\uDFCD", "\uD83C\uDFCE", "\uD83D\uDEF4", "\uD83D\uDEF5", "\uD83D\uDEF6", "\uD83C\uDFAA",
-      "\uD83E\uDE84", "\uD83E\uDDFF", "\uD83E\uDDD6", "\uD83E\uDDD9", "\uD83E\uDDDA", "\uD83E\uDDDB", "\uD83E\uDDDC", "\uD83E\uDDDD"
-    )),
-    EmojiCategory("\u2708\uFE0F", listOf( // Travel & Places
-      "\uD83D\uDE97", "\uD83D\uDE95", "\uD83D\uDE99", "\uD83D\uDE8C", "\uD83D\uDE8E", "\uD83C\uDFCE\uFE0F", "\uD83D\uDE93", "\uD83D\uDE91",
-      "\uD83D\uDE92", "\uD83D\uDE9A", "\uD83D\uDEB2", "\uD83D\uDEF5", "\uD83C\uDFCD\uFE0F", "\u2708\uFE0F", "\uD83D\uDE80", "\uD83D\uDEF8",
-      "\uD83D\uDE81", "\uD83D\uDE86", "\uD83D\uDE87", "\uD83D\uDEA2", "\u26F5", "\uD83D\uDEA4", "\uD83D\uDDFD", "\uD83D\uDFC1",
-      "\uD83C\uDFE0", "\uD83C\uDFE2", "\uD83C\uDFE5", "\uD83C\uDFE6", "\uD83C\uDFE8", "\uD83C\uDFEA", "\uD83D\uDCCD", "\uD83D\uDDFA\uFE0F",
-      "\uD83C\uDFE1", "\uD83C\uDFEB", "\uD83C\uDFEC", "\uD83C\uDFEF", "\uD83C\uDFF0", "\u26EA", "\uD83D\uDDFC", "\uD83C\uDF04",
-      "\uD83C\uDF05", "\uD83C\uDF07", "\uD83C\uDF09", "\uD83C\uDF0A", "\uD83C\uDF0C", "\uD83C\uDF0D", "\uD83C\uDF0E", "\uD83C\uDF10",
-      "\uD83C\uDF11", "\uD83C\uDF13", "\uD83C\uDF15", "\uD83C\uDF1B", "\uD83C\uDF1F", "\u2B50", "\uD83C\uDF20", "\uD83C\uDF01",
-      "\uD83C\uDF03", "\uD83C\uDF06", "\uD83C\uDFE3", "\uD83C\uDFE4", "\uD83C\uDFE7", "\uD83C\uDFE9", "\uD83C\uDFED", "\uD83D\uDFFF",
-      "\uD83D\uDEFA", "\uD83D\uDEFC", "\uD83D\uDEFD", "\uD83D\uDEF3", "\u26F2", "\u26F3", "\u26F7", "\u26F9"
-    )),
-    EmojiCategory("\uD83D\uDCF1", listOf( // Objects
-      "\uD83D\uDCF1", "\uD83D\uDCBB", "\u2328\uFE0F", "\uD83D\uDDA5\uFE0F", "\uD83D\uDDA8\uFE0F", "\uD83D\uDCF7", "\uD83C\uDFA5", "\uD83D\uDCFA",
-      "\uD83D\uDCB0", "\uD83D\uDCB3", "\uD83D\uDC8E", "\u2696\uFE0F", "\uD83D\uDEE0\uFE0F", "\u2699\uFE0F", "\uD83D\uDD27", "\uD83D\uDD28",
-      "\uD83D\uDCA1", "\uD83D\uDD26", "\uD83D\uDD0B", "\uD83E\uDDF2", "\uD83D\uDCD6", "\uD83D\uDCDD", "\uD83D\uDCCB", "\uD83D\uDCCC",
-      "\uD83D\uDCE7", "\uD83D\uDCE8", "\uD83D\uDD12", "\uD83D\uDD11", "\uD83D\uDD0E", "\uD83D\uDD17", "\u2702\uFE0F", "\uD83D\uDDD1\uFE0F",
-      "\uD83D\uDCBC", "\uD83D\uDCC1", "\uD83D\uDCC2", "\uD83D\uDCC5", "\uD83D\uDCC6", "\uD83D\uDCC7", "\uD83D\uDCC8", "\uD83D\uDCC9",
-      "\uD83D\uDCCA", "\uD83D\uDCE0", "\uD83D\uDCE1", "\uD83D\uDCE2", "\uD83D\uDCE3", "\uD83D\uDCE4", "\uD83D\uDCE5", "\uD83D\uDCE6",
-      "\uD83E\uDDF5", "\uD83E\uDDF6", "\uD83E\uDDF7", "\uD83E\uDDF8", "\uD83E\uDDF9", "\uD83E\uDE70", "\uD83E\uDE73", "\uD83E\uDE74",
-      "\uD83D\uDDF3", "\uD83D\uDDDD", "\uD83D\uDDDE", "\uD83D\uDDF2", "\uD83D\uDD0A", "\uD83D\uDD09", "\uD83D\uDD08", "\uD83D\uDD07",
-      "\uD83E\uDE90", "\uD83E\uDE91", "\uD83E\uDE92", "\uD83E\uDE93", "\uD83E\uDE94", "\uD83E\uDE95", "\uD83D\uDCB8", "\uD83D\uDCB5"
-    )),
-    EmojiCategory("\uD83D\uDCAF", listOf( // Symbols
-      "\u2705", "\u2611\uFE0F", "\u2714\uFE0F", "\u274C", "\u274E", "\u2795", "\u2796", "\u2797",
-      "\u27A1\uFE0F", "\u2B05\uFE0F", "\u2B06\uFE0F", "\u2B07\uFE0F", "\u2197\uFE0F", "\u2198\uFE0F", "\u21A9\uFE0F", "\u21AA\uFE0F",
-      "\u2139\uFE0F", "\u2757", "\u2753", "\u2755", "\u2754", "\u267B\uFE0F", "\u267E\uFE0F", "\u269C\uFE0F",
-      "\uD83D\uDD31", "\uD83D\uDD30", "\u2B55", "\uD83D\uDFE2", "\uD83D\uDD35", "\uD83D\uDFE3", "\uD83D\uDFE1", "\u26AB",
-      "\u2716\uFE0F", "\u26A0\uFE0F", "\u26D4", "\uD83D\uDEAB", "\uD83D\uDEAC", "\uD83D\uDEAD", "\uD83D\uDEAE", "\uD83D\uDEAF",
-      "\uD83D\uDD34", "\uD83D\uDFE0", "\uD83D\uDFE1", "\u2B1B", "\u2B1C", "\u25FC\uFE0F", "\u25FB\uFE0F", "\u25AA\uFE0F",
-      "\uD83D\uDFE5", "\uD83D\uDFE7", "\uD83D\uDFE8", "\uD83D\uDFE9", "\uD83D\uDFE6", "\uD83D\uDFEA", "\uD83D\uDFEB", "\u2B55",
-      "\uD83C\uDD92", "\uD83C\uDD93", "\uD83C\uDD95", "\uD83C\uDD97", "\uD83C\uDD98", "\uD83C\uDD99", "\uD83D\uDD3A", "\uD83D\uDD3B",
-      "\u2764\uFE0F\u200D\uD83D\uDD25", "\u2764\uFE0F\u200D\uD83E\uDDB5", "\uD83D\uDCA2", "\uD83D\uDCAC", "\uD83D\uDCAD", "\uD83D\uDCAF", "\uD83D\uDD36", "\uD83D\uDD37"
-    )),
-  )
+  private fun emojiCategories(): List<EmojiCategory> {
+    return com.clipvault.mobile.keyboard.EmojiCatalog.allCategories(recentEmojis).map {
+      EmojiCategory(it.icon, it.emojis)
+    }
+  }
 }
+
+

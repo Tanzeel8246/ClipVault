@@ -2,7 +2,7 @@
   "expo": {
     "name": "ClipVault",
     "slug": "clipvault",
-    "version": "1.1.8",
+    "version": "1.3.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "clipvault",
@@ -16,7 +16,7 @@
     },
     "android": {
       "package": "com.clipvault.mobile",
-      "versionCode": 11,
+      "versionCode": 25,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#080810"
@@ -32,7 +32,16 @@
     },
     "plugins": [
       "expo-notifications",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "targetSdkVersion": 36
+          }
+        }
+      ]
     ]
   }
 }

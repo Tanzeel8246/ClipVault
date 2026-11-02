@@ -42,15 +42,20 @@ type ClipCardProps = {
   onMarkNormal?: (id: string) => void;
   lang: AppLanguage;
   T: ThemeColors;
+  selected?: boolean;
+  selectionMode?: boolean;
+  onSelect?: () => void;
+  onLongPressCard?: () => void;
 };
 
-export function ClipCard({ clip, maskSensitive, onFavorite, onDelete, onCopy, onPin, onEdit, onMarkNormal, lang, T }: ClipCardProps) {
+export function ClipCard({ clip, maskSensitive, onFavorite, onDelete, onCopy, onPin, onEdit, onMarkNormal, lang, T, selected, selectionMode, onSelect, onLongPressCard }: ClipCardProps) {
   const styles = React.useMemo(() => getCardStyles(T, lang), [T, lang]);
   const categoryColor = getCategoryColors(T)[clip.category] ?? T.accent;
   const scale = useRef(new Animated.Value(1)).current;
   const swipeAnim = useRef(new Animated.Value(0)).current;
   const [expanded, setExpanded] = useState(false);
   const [revealed, setRevealed] = useState(false);
+  const [showMoreActions, setShowMoreActions] = useState(false);
 
   const isMasked = clip.isSensitive && maskSensitive && !revealed;
 
@@ -86,6 +91,11 @@ export function ClipCard({ clip, maskSensitive, onFavorite, onDelete, onCopy, on
     : clip.text.substring(0, 140) + (clip.text.length > 140 ? '…' : '');
 
   const pressCard = () => {
+    if (selectionMode) {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      onSelect?.();
+      return;
+    }
     Animated.sequence([
       Animated.timing(scale, { toValue: 0.97, duration: 70, useNativeDriver: true }),
       Animated.timing(scale, { toValue: 1, duration: 70, useNativeDriver: true }),
@@ -106,6 +116,7 @@ export function ClipCard({ clip, maskSensitive, onFavorite, onDelete, onCopy, on
           styles.card,
           clip.isPinned && { borderColor: `${T.amber}66` },
           clip.isSensitive && { borderColor: `${T.red}44` },
+          selected && { borderColor: T.accent, borderWidth: 2, backgroundColor: `${T.accent}11` },
           { transform: [{ scale }, { translateX: swipeAnim }] },
         ]}
         {...panResponder.panHandlers}
@@ -113,8 +124,14 @@ export function ClipCard({ clip, maskSensitive, onFavorite, onDelete, onCopy, on
         <Pressable
         onPress={pressCard}
         onLongPress={() => {
-          void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          onCopy(clip.isSensitive ? clip.text : clip.text);
+          if (selectionMode) {
+            onSelect?.();
+          } else if (onLongPressCard) {
+            onLongPressCard();
+          } else {
+            void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            onCopy(clip.text);
+          }
         }}
       >
         {/* Header */}
@@ -189,13 +206,6 @@ export function ClipCard({ clip, maskSensitive, onFavorite, onDelete, onCopy, on
           T={T} lang={lang}
         />
         <ActionBtn
-          icon="✏️"
-          label={lang === 'en' ? 'Edit' : 'ترمیم'}
-          color={T.accent}
-          onPress={() => onEdit?.(clip)}
-          T={T} lang={lang}
-        />
-        <ActionBtn
           icon={clip.isFavorite ? '★' : '☆'}
           label={clip.isFavorite ? t('unfavorite', lang) : t('favorite', lang)}
           color={clip.isFavorite ? T.amber : T.muted}
@@ -209,18 +219,36 @@ export function ClipCard({ clip, maskSensitive, onFavorite, onDelete, onCopy, on
           onPress={() => onPin(clip.id, !clip.isPinned)}
           T={T} lang={lang}
         />
+        {showMoreActions && (
+          <>
+            <ActionBtn
+              icon="✏️"
+              label={lang === 'en' ? 'Edit' : 'ترمیم'}
+              color={T.accent}
+              onPress={() => onEdit?.(clip)}
+              T={T} lang={lang}
+            />
+            <ActionBtn
+              icon="⤴"
+              label={t('share', lang)}
+              color={T.green}
+              onPress={() => void Share.share({ message: clip.isSensitive ? '(sensitive content)' : clip.text })}
+              T={T} lang={lang}
+            />
+            <ActionBtn
+              icon="✕"
+              label={t('delete', lang)}
+              color={T.red}
+              onPress={() => onDelete(clip.id)}
+              T={T} lang={lang}
+            />
+          </>
+        )}
         <ActionBtn
-          icon="⤴"
-          label={t('share', lang)}
-          color={T.green}
-          onPress={() => void Share.share({ message: clip.isSensitive ? '(sensitive content)' : clip.text })}
-          T={T} lang={lang}
-        />
-        <ActionBtn
-          icon="✕"
-          label={t('delete', lang)}
-          color={T.red}
-          onPress={() => onDelete(clip.id)}
+          icon={showMoreActions ? '«' : '⋯'}
+          label={showMoreActions ? (lang === 'en' ? 'Less' : 'کم') : (lang === 'en' ? 'More' : 'مزید')}
+          color={T.muted}
+          onPress={() => setShowMoreActions(v => !v)}
           T={T} lang={lang}
         />
       </View>
@@ -235,7 +263,10 @@ function ActionBtn({ icon, label, onPress, color, T, lang }: { icon: string; lab
     <TouchableOpacity
       accessibilityLabel={label}
       style={[styles.actionBtn, { borderColor: `${color}44` }]}
-      onPress={onPress}
+      onPress={() => {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        onPress();
+      }}
       activeOpacity={0.7}
     >
       <Text style={[styles.actionIcon, { color }]}>{icon}</Text>
@@ -260,7 +291,7 @@ const getCardStyles = (T: ThemeColors, lang: AppLanguage) => {
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 20,
-    backgroundColor: (T as any).background || '#000000',
+    backgroundColor: T.bg,
     borderRadius: 14,
   },
   swipeHintText: { fontSize: 12, fontWeight: '700', opacity: 0.6, ...ff },
@@ -283,14 +314,14 @@ const getCardStyles = (T: ThemeColors, lang: AppLanguage) => {
   maskedText: { color: T.red, fontSize: 15, letterSpacing: 4 },
   statsRow: { flexDirection: 'row', gap: 4, paddingHorizontal: 12, paddingBottom: 8, alignItems: 'center' },
   statText: { fontSize: 11, color: T.muted, ...ff },
-  statDot: { fontSize: 11, color: '#ffffff44' },
+  statDot: { fontSize: 11, color: `${T.muted}66` },
   cardActions: {
     flexDirection: 'row',
     borderTopWidth: 1,
     borderTopColor: T.border,
     padding: 9,
     gap: 6,
-    backgroundColor: '#0a0a18',
+    backgroundColor: T.surface,
   },
   actionBtn: {
     flex: 1,

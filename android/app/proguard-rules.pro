@@ -11,4 +11,16 @@
 -keep class com.swmansion.reanimated.** { *; }
 -keep class com.facebook.react.turbomodule.** { *; }
 
-# Add any project specific keep options here:
+# ClipVault Native Modules and Services
+-keep class com.clipvault.mobile.** { *; }
+-keep interface com.clipvault.mobile.** { *; }
+
+# React Native & JNI
+-keep class com.facebook.react.** { *; }
+-keep class com.facebook.jni.** { *; }
+
+# FlashList
+-keep class com.shopify.reactnative.flash_list.** { *; }
+
+# Expo Modules
+-keep class expo.modules.** { *; }

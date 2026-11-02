@@ -1,19 +1,33 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import { NativeModules, Platform } from 'react-native';
-import { ClipItem, ClipSettings, ClipStats, SensitiveDetection, SensitiveType } from './types';
+import { ClipItem, ClipSettings, ClipStats, DEFAULT_SETTINGS, SensitiveDetection, SensitiveType, SETTINGS_KEY } from './types';
 
 let initPromise: Promise<void> | null = null;
 let initialized = false;
 
 // ─────────────────────────────────────────────────────────────
-// Security & Encryption
+// Security & Encryption & Utilities
 // ─────────────────────────────────────────────────────────────
-const countWords = (value: string) => {
+export const countWords = (value: string) => {
   const text = value.trim();
   return text ? text.split(/\s+/).length : 0;
 };
+
+export function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'کچھ غلط ہو گیا۔';
+}
+
+export async function readSettings(): Promise<ClipSettings> {
+  try {
+    const saved = await AsyncStorage.getItem(SETTINGS_KEY);
+    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
 
 const escapeHtml = (value: string) =>
   value
@@ -55,8 +69,11 @@ type NativeClipDatabaseModule = {
   toggleFavorite?: (id: string, value: boolean) => Promise<boolean>;
   togglePin?: (id: string, value: boolean) => Promise<boolean>;
   toggleSensitive?: (id: string, value: boolean) => Promise<boolean>;
-  updateClipText?: (id: string, text: string) => Promise<boolean>;
+  updateClipText?: (id: string, text: string, category: string, sensitive: boolean) => Promise<boolean>;
   deleteClip?: (id: string) => Promise<boolean>;
+  bulkDeleteClips?: (ids: string[]) => Promise<boolean>;
+  bulkPinClips?: (ids: string[], value: boolean) => Promise<boolean>;
+  bulkFavoriteClips?: (ids: string[], value: boolean) => Promise<boolean>;
   clearAllClips?: () => Promise<boolean>;
   clearSensitiveClips?: () => Promise<number>;
   applyClipMaintenance?: (autoDelete: string, maxClips: string) => Promise<boolean>;
@@ -187,7 +204,7 @@ export class DatabaseService {
     await DatabaseService.init();
 
     const db = ensureNativeClipDb();
-    const limit = Math.max(1, Math.min(Number(options.limit) || 50, 10000));
+    const limit = Math.max(1, Math.min(Number(options.limit) || 100, 10000));
     const offset = Math.max(0, Number(options.offset) || 0);
     const raw = await db.getClips?.(
       options.search?.trim() ?? '',
@@ -216,14 +233,32 @@ export class DatabaseService {
     await ensureNativeClipDb().toggleSensitive?.(id, value);
   }
 
-  static async updateClipText(id: string, text: string): Promise<boolean> {
+  static async updateClipText(id: string, text: string, category: string = '', sensitive: boolean = false): Promise<boolean> {
     await DatabaseService.init();
-    return !!(await ensureNativeClipDb().updateClipText?.(id, text));
+    return !!(await ensureNativeClipDb().updateClipText?.(id, text, category, sensitive));
   }
 
   static async deleteClip(id: string): Promise<void> {
     await DatabaseService.init();
     await ensureNativeClipDb().deleteClip?.(id);
+  }
+
+  static async bulkDelete(ids: string[]): Promise<void> {
+    await DatabaseService.init();
+    if (!ids.length) return;
+    await ensureNativeClipDb().bulkDeleteClips?.(ids);
+  }
+
+  static async bulkPin(ids: string[], value: boolean): Promise<void> {
+    await DatabaseService.init();
+    if (!ids.length) return;
+    await ensureNativeClipDb().bulkPinClips?.(ids, value);
+  }
+
+  static async bulkFavorite(ids: string[], value: boolean): Promise<void> {
+    await DatabaseService.init();
+    if (!ids.length) return;
+    await ensureNativeClipDb().bulkFavoriteClips?.(ids, value);
   }
 
   static async clearAll(): Promise<void> {
@@ -430,6 +465,50 @@ export class Exporter {
     const { uri } = await Print.printToFileAsync({ html });
     await Exporter.share(uri);
     return uri;
+  }
+
+  static async exportWord(clips: ClipItem[]): Promise<string> {
+    const rows = clips
+      .map((clip, index) => {
+        const displayText = clip.isSensitive
+          ? '<em style="color:#888">(Content masked for privacy)</em>'
+          : escapeHtml(clip.text).replace(/\n/g, '<br>');
+        const timestamp = escapeHtml(new Date(clip.timestamp).toLocaleString());
+        const category = escapeHtml(clip.category);
+        const sensitive = clip.isSensitive ? ' [Sensitive]' : '';
+
+        return `
+          <div style="border-bottom: 1px solid #d1d5db; padding: 12px 0; margin-bottom: 12px;">
+            <p style="color: #4338ca; font-weight: bold; margin-bottom: 4px;">#${index + 1} [${category}]${sensitive} — ${timestamp}</p>
+            <p style="white-space: pre-wrap; font-size: 11pt; line-height: 1.5; color: #111827;">${displayText}</p>
+          </div>
+        `;
+      })
+      .join('');
+
+    const html = `
+      <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+        <head>
+          <meta charset="utf-8">
+          <title>ClipVault Word Export</title>
+          <style>
+            body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; padding: 24px; color: #111827; }
+            h1 { color: #4338ca; margin-bottom: 4px; }
+            .meta { color: #6b7280; font-size: 12px; margin-bottom: 20px; }
+          </style>
+        </head>
+        <body>
+          <h1>ClipVault Export</h1>
+          <div class="meta">${escapeHtml(new Date().toLocaleString())} — ${clips.length} clips</div>
+          <hr style="border: none; border-top: 2px solid #6366f1; margin-bottom: 20px;" />
+          ${rows}
+        </body>
+      </html>
+    `;
+
+    const path = await Exporter.writeFile(`clipvault_export_${Date.now()}.doc`, html);
+    await Exporter.share(path);
+    return path;
   }
 
   static async exportBackupJSON(): Promise<string> {

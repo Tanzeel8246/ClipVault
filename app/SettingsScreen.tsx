@@ -40,7 +40,7 @@ import {
   stopBackgroundMonitor,
 } from '../services/BackgroundMonitor';
 import { ClipboardMonitor } from '../services/ClipboardMonitor';
-import { DatabaseService, Exporter } from '../services/CoreServices';
+import { DatabaseService, Exporter, getErrorMessage } from '../services/CoreServices';
 import { GoogleDriveBackupService } from '../services/GoogleDriveBackup';
 import { NASTALEEQ_FONT, t } from '../services/i18n';
 import { useAppTheme } from '../theme/useAppTheme';
@@ -48,6 +48,8 @@ import { ThemeColors } from '../theme/colors';
 import { AppLanguage, AutoMonitorMinutes, ClipSettings, ClipStats, DEFAULT_SETTINGS, SensitiveExpiry, SETTINGS_KEY } from '../services/types';
 import { useClipStore } from '../store/useClipStore';
 import { useLocalSearchParams } from 'expo-router';
+import { PinManagerModal } from '../components/PinManagerModal';
+import { SyncPasswordModal } from '../components/SyncPasswordModal';
 
 // ─────────────────────────────────────────────────────────────
 // Design Tokens
@@ -57,10 +59,6 @@ const WHATSAPP_URL = 'https://wa.me/923023448246';
 const CODEHUBB_URL = 'https://codehubb.com';
 const MINDCRAFTS_URL = 'https://mindcraftsai.com';
 const PRIVACY_POLICY_URL = 'https://mindcraftsai.com/privacy-policy';
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'Something went wrong';
-}
 
 async function openExternal(url: string) {
   try {
@@ -272,6 +270,8 @@ function OptionGroup<OptionType extends string>({
   );
 }
 
+type PinMode = 'setup' | 'confirm' | 'disable' | 'change_old' | 'change_new' | 'change_confirm';
+
 // ─────────────────────────────────────────────────────────────
 // Main SettingsScreen
 // ─────────────────────────────────────────────────────────────
@@ -288,10 +288,16 @@ export default function SettingsScreen() {
   const [monitorBusy, setMonitorBusy] = useState(false);
   const [driveBusy, setDriveBusy] = useState(false);
   const [driveAccount, setDriveAccount] = useState('');
+  
+  const [pinModalVisible, setPinModalVisible] = useState(false);
+  const [pinMode, setPinMode] = useState<PinMode>('setup');
+  const [syncPasswordPromptVisible, setSyncPasswordPromptVisible] = useState(false);
+  const [syncPasswordMode, setSyncPasswordMode] = useState<'setup' | 'disable' | 'change'>('setup');
+
+  const apiKeyInputRef = useRef<TextInput>(null);
   const nasta = lang === 'ur' ? NASTALEEQ_FONT : undefined;
 
   const params = useLocalSearchParams();
-  const apiKeyInputRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (!isApiKeyModified) {
@@ -339,7 +345,27 @@ export default function SettingsScreen() {
     }
   };
 
+  const handlePinToggle = () => {
+    if (settings.pinLockEnabled) {
+      setPinMode('disable');
+    } else {
+      setPinMode('setup');
+    }
+    setPinModalVisible(true);
+  };
 
+  const handlePinSuccess = async (newHash: string | null) => {
+    setPinModalVisible(false);
+    if (newHash === null) {
+      await updateSetting('pinHash', '');
+      await updateSetting('pinLockEnabled', false);
+      showToast(lang === 'en' ? '🔓 PIN lock disabled' : '🔓 پن لاک غیر فعال ہو گیا');
+    } else {
+      await updateSetting('pinHash', newHash);
+      await updateSetting('pinLockEnabled', true);
+      showToast(lang === 'en' ? '🔒 PIN lock enabled' : '🔒 پن لاک فعال ہو گیا');
+    }
+  };
 
   // ── Data actions ──────────────────────────────────────────
   const clearAllData = () => {
@@ -448,12 +474,28 @@ export default function SettingsScreen() {
   const backupToGoogleDriveNow = async () => {
     try {
       setDriveBusy(true);
-      await GoogleDriveBackupService.backupNow();
+      const res = await GoogleDriveBackupService.backupNow();
       await loadSettings();
-      showToast(lang === 'en' ? '✅ Google Drive backup saved' : '✅ Google Drive بیک اپ محفوظ ہو گیا');
+      showToast(lang === 'en' ? `✅ Google Drive backup saved (${res.clipCount} clips)` : `✅ Google Drive بیک اپ محفوظ ہو گیا (${res.clipCount} کلپس)`);
       setDriveAccount(settings.googleDriveAccountEmail || driveAccount);
-    } catch (err) {
-      Alert.alert(lang === 'en' ? 'Drive Backup Failed' : 'Drive بیک اپ ناکام', getErrorMessage(err));
+    } catch (err: any) {
+      const msg = getErrorMessage(err);
+      if (msg.includes('EMPTY_LOCAL_BACKUP_BLOCKED:')) {
+        const count = msg.split('EMPTY_LOCAL_BACKUP_BLOCKED:')[1] || '0';
+        Alert.alert(
+          t('driveBackupProtected', lang),
+          (lang === 'en' ? t('driveBackupProtectedMsg', lang) : t('driveBackupProtectedMsg', lang)).replace('%d', count),
+          [
+            { text: t('cancel', lang), style: 'cancel' },
+            {
+              text: t('driveRestoreNow', lang),
+              onPress: () => restoreFromGoogleDriveNow(),
+            },
+          ],
+        );
+        return;
+      }
+      Alert.alert(lang === 'en' ? 'Drive Backup Failed' : 'Drive بیک اپ ناکام', msg);
     } finally {
       setDriveBusy(false);
     }
@@ -475,9 +517,65 @@ export default function SettingsScreen() {
               const restored = await GoogleDriveBackupService.restoreLatestBackup();
               await loadSettings();
               await loadStats();
-              showToast(lang === 'en' ? `✅ ${restored} clips restored from Drive` : `✅ Drive سے ${restored} کلپس بحال ہو گئیں`);
+              if (restored > 0) {
+                showToast(lang === 'en' ? `✅ ${restored} clips restored from Drive` : `✅ Drive سے ${restored} کلپس بحال ہو گئیں`);
+              } else {
+                Alert.alert(
+                  lang === 'en' ? 'No Clips Found in Latest Backup' : 'تازہ بیک اپ میں کوئی کلپس نہیں ملیں',
+                  lang === 'en'
+                    ? 'The latest backup file has 0 clips. Would you like to scan Google Drive history for older versions?'
+                    : 'تازہ بیک اپ فائل خالی ہے۔ کیا آپ پچھلے ورژنز اور ہسٹری اسکین کر کے ڈیٹا تلاش کرنا چاہتے ہیں؟',
+                  [
+                    { text: t('cancel', lang), style: 'cancel' },
+                    {
+                      text: lang === 'en' ? 'Scan History' : 'ہسٹری اسکین کریں',
+                      onPress: () => recoverFromDriveHistoryNow(),
+                    },
+                  ],
+                );
+              }
             } catch (err) {
               Alert.alert(lang === 'en' ? 'Drive Restore Failed' : 'Drive بحالی ناکام', getErrorMessage(err));
+            } finally {
+              setDriveBusy(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  const recoverFromDriveHistoryNow = () => {
+    Alert.alert(
+      t('driveRecoverHistory', lang),
+      lang === 'en'
+        ? 'Scan past Google Drive revisions and safety copies to recover clips from previous backups?'
+        : 'کیا آپ گوگل ڈرائیو کی ہسٹری اور پرانے ورژنز کو اسکین کر کے سابقہ کلپس تلاش اور بحال کرنا چاہتے ہیں؟',
+      [
+        { text: t('cancel', lang), style: 'cancel' },
+        {
+          text: lang === 'en' ? 'Scan & Recover' : 'اسکین اور بحال کریں',
+          onPress: async () => {
+            try {
+              setDriveBusy(true);
+              const { restored, totalVersionsFound } = await GoogleDriveBackupService.recoverFromHistory();
+              await loadSettings();
+              await loadStats();
+              if (restored > 0) {
+                Alert.alert(
+                  lang === 'en' ? 'Recovery Successful' : 'کامیاب بحالی',
+                  lang === 'en'
+                    ? `Successfully recovered ${restored} clips from ${totalVersionsFound} past versions!`
+                    : `گوگل ڈرائیو کے ${totalVersionsFound} پرانے ورژنز سے ${restored} کلپس کامیابی سے واپس آ گئیں!`,
+                );
+              } else {
+                Alert.alert(
+                  lang === 'en' ? 'No Clips Found' : 'کوئی کلپس نہیں ملیں',
+                  t('driveHistoryNone', lang),
+                );
+              }
+            } catch (err) {
+              Alert.alert(lang === 'en' ? 'Recovery Failed' : 'بحالی ناکام', getErrorMessage(err));
             } finally {
               setDriveBusy(false);
             }
@@ -562,17 +660,34 @@ export default function SettingsScreen() {
       <PrivacyDashboard stats={stats} onClearSensitive={handleClearSensitive} lang={lang} T={T} />
 
       {/* Security */}
-      {hasBiometric && (
-        <SettingsSection title={lang === 'en' ? 'Security' : 'سیکیورٹی'} icon="🔐" T={T} lang={lang}>
+      <SettingsSection title={lang === 'en' ? 'Security' : 'سیکیورٹی'} icon="🔐" T={T} lang={lang}>
+        {hasBiometric && (
           <SettingRow
             T={T} lang={lang}
-            label={lang === 'en' ? 'App Lock' : 'ایپ لاک'}
-            description={lang === 'en' ? 'Require phone fingerprint, pattern, or PIN on launch' : 'ایپلی کیشن کھولنے پر فون فنگر پرنٹ یا سکرین لاک کا مطالبہ کریں'}
+            label={lang === 'en' ? 'Biometric Lock' : 'بایومیٹرک لاک'}
+            description={lang === 'en' ? 'Require phone fingerprint or face to unlock app' : 'ایپ کھولنے پر فون فنگر پرنٹ یا چہرے کی تصدیق کا مطالبہ کریں'}
             value={settings.biometricLock}
             onToggle={value => void toggleBiometric(value)}
           />
-        </SettingsSection>
-      )}
+        )}
+        <SettingRow
+          T={T} lang={lang}
+          label={lang === 'en' ? 'App PIN Lock' : 'ایپ پن لاک'}
+          description={lang === 'en' ? 'Require a 4-digit PIN to access sensitive clips' : 'حساس کلپس تک رسائی کے لیے 4 ہندسوں کا پن درکار کریں'}
+          value={settings.pinLockEnabled}
+          onToggle={handlePinToggle}
+        />
+        {settings.pinLockEnabled && (
+          <TouchableOpacity 
+            style={{ paddingVertical: 12, paddingHorizontal: 4, flexDirection: 'row', alignItems: 'center' }}
+            onPress={() => { setPinMode('change_old'); setPinModalVisible(true); }}
+          >
+            <Text style={{ fontSize: 18, marginRight: 12 }}>🔑</Text>
+            <Text style={{ flex: 1, color: T.text, fontSize: 16, fontFamily: nasta }}>{lang === 'en' ? 'Change PIN' : 'پن تبدیل کریں'}</Text>
+            <Text style={{ color: T.accent, fontSize: 16 }}>›</Text>
+          </TouchableOpacity>
+        )}
+      </SettingsSection>
 
       {/* Sensitive Content */}
       <SettingsSection title={lang === 'en' ? 'Privacy Controls' : 'پرائیویسی کنٹرولز'} icon="🛡️" T={T} lang={lang}>
@@ -921,6 +1036,34 @@ export default function SettingsScreen() {
             <Text style={styles.monitorBtnText}>{t('driveRestoreNow', lang)}</Text>
           </TouchableOpacity>
         </View>
+
+        {(settings.googleDriveBackupEnabled || driveAccount) && (
+          <TouchableOpacity
+            disabled={driveBusy}
+            style={[
+              styles.monitorBtn,
+              { marginTop: 10, backgroundColor: 'rgba(59, 130, 246, 0.12)', borderColor: '#3b82f6', borderWidth: 1 },
+              driveBusy && styles.btnDisabled,
+            ]}
+            onPress={recoverFromDriveHistoryNow}
+          >
+            <Text style={[styles.monitorBtnText, { color: '#60a5fa', fontWeight: '600' }]}>
+              🕒 {t('driveRecoverHistory', lang)}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        <SettingRow
+          T={T} lang={lang}
+          label={lang === 'en' ? 'Sync Password (Encryption)' : 'سنک پاس ورڈ (انکرپشن)'}
+          description={lang === 'en' ? 'Encrypt backups. Required to view clips on PC or restore.' : 'بیک اپ کو محفوظ بنائیں۔ پی سی پر دیکھنے کے لیے لازمی ہے۔'}
+          value={!!settings.syncPassword}
+          onToggle={value => {
+            setSyncPasswordMode(value ? 'setup' : 'disable');
+            setSyncPasswordPromptVisible(true);
+          }}
+        />
+
         {(settings.googleDriveBackupEnabled || driveAccount) && (
           <TouchableOpacity
             disabled={driveBusy}
@@ -952,11 +1095,12 @@ export default function SettingsScreen() {
         <Image source={require('../assets/splash-icon.png')} style={styles.aboutLogo} />
         <Text style={styles.aboutTitle}>{t('appName', lang)}</Text>
         <Text style={styles.aboutBrand}>by {t('mindcrafts', lang)}</Text>
-        <Text style={styles.aboutVersion}>{t('version', lang)} 1.0.1 · Build 2</Text>
+        <Text style={styles.aboutVersion}>{t('version', lang)} 1.2.7 · Build 24</Text>
         <Text style={styles.aboutTagline}>{t('appTagline', lang)}</Text>
 
         <View style={styles.contactRow}>
           {[
+            { label: `⭐ ${lang === 'en' ? 'Rate on Google Play' : 'پلے اسٹور پر ریویو دیں'}`, url: 'https://play.google.com/store/apps/details?id=com.clipvault.mobile' },
             { label: `💬 ${t('whatsapp', lang)}`, url: WHATSAPP_URL },
             { label: `🌐 codehubb.com`, url: CODEHUBB_URL },
             { label: `🌐 mindcrafts.net`, url: MINDCRAFTS_URL },
@@ -967,7 +1111,36 @@ export default function SettingsScreen() {
             </TouchableOpacity>
           ))}
         </View>
-      </View>
+    </View>
+
+      <PinManagerModal 
+        visible={pinModalVisible}
+        mode={pinMode}
+        lang={lang}
+        T={T}
+        currentPinHash={settings.pinHash || ''}
+        onSuccess={handlePinSuccess}
+        onCancel={() => setPinModalVisible(false)}
+      />
+
+      <SyncPasswordModal
+        visible={syncPasswordPromptVisible}
+        mode={syncPasswordMode}
+        lang={lang}
+        T={T}
+        currentPassword={settings.syncPassword}
+        onSuccess={async (newPassword) => {
+          setSyncPasswordPromptVisible(false);
+          await updateSetting('syncPassword', newPassword || undefined);
+          if (newPassword) {
+            showToast(lang === 'en' ? '✅ Sync Password set. Backups will be encrypted.' : '✅ سنک پاس ورڈ سیٹ ہو گیا۔ بیک اپ اب انکرپٹ ہوں گے۔');
+          } else {
+            showToast(lang === 'en' ? '🔓 Sync Password removed. Backups are unencrypted.' : '🔓 سنک پاس ورڈ ہٹا دیا گیا۔ بیک اپ غیر محفوظ ہیں۔');
+          }
+        }}
+        onCancel={() => setSyncPasswordPromptVisible(false)}
+      />
+
     </ScrollView>
   );
 }

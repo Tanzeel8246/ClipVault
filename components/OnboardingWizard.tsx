@@ -49,6 +49,105 @@ async function readSettings(): Promise<ClipSettings> {
   }
 }
 
+const WIZARD_TEXT = {
+  en: {
+    brand: 'ClipVault',
+    brandSub: 'by MindCrafts_AI',
+    langButton: '🌐 Language',
+    welcomeTitle: 'Welcome',
+    welcomeSubtitle: 'Select App Language',
+    enCardTitle: 'English',
+    enCardDesc: 'Standard English interface and typography',
+    urCardTitle: 'Urdu (اردو)',
+    urCardDesc: 'Pure Urdu interface with Jameel Noori Nastaleeq font',
+    stepTitle: '🔒 Privacy & Setup',
+    policyTitle: 'Privacy Policy Summary',
+    policyBullet1: 'Your clipboard clips are stored 100% locally on this device. We never upload your data to any servers.',
+    policyBullet2: 'Sensitive data like OTPs, passwords, and card numbers are automatically masked and kept secure.',
+    sec1: '1. App Permissions',
+    sec1Btn: 'Notifications Permission',
+    sec2: '2. Keyboard Setup (Required)',
+    sec2Desc: 'Auto clipboard capture requires the custom keyboard. Please enable it in Settings first, then select it as active.',
+    kbdEnabled: '✅ Keyboard Enabled',
+    kbdEnableBtn: '⚙️ Enable Keyboard',
+    kbdActive: '✅ Keyboard Active',
+    kbdSelectBtn: '🔄 Select Keyboard',
+    sec3: '3. Cloud Backup (Optional)',
+    sec3Desc: 'Securely back up your clipboard data to your personal Google Drive hidden app folder. Useful for restoring data on new devices.',
+    driveConnected: '✓ Google Drive Connected',
+    driveDisconnect: 'Disconnect',
+    driveConnect: '🔗 Connect Google Drive',
+    sec4: '4. Security Lock (Optional)',
+    sec4Title: '🔐 App Lock',
+    sec4Desc: 'Require phone fingerprint, PIN, pattern, or passcode on launch.',
+    sec4Enabled: 'Enabled',
+    sec4Enable: 'Enable',
+    sec5: '5. Select Privacy Mode',
+    privacyStdTitle: 'Standard Privacy',
+    privacyStdDesc: 'Mask sensitive clips but keep them until you manually delete them.',
+    privacyStrictTitle: 'Strict Privacy',
+    privacyStrictDesc: 'Mask OTP/passwords and automatically delete sensitive clips after 5 minutes.',
+    finishBtn: 'Finish Setup & Start',
+    introTitle: 'Welcome to ClipVault! 🎉',
+    introSub: 'Your secure local clipboard manager',
+    introG1Title: 'Auto Copy Capture',
+    introG1Desc: 'Any text, links, emails, and phone numbers you copy are saved locally into searchable categories.',
+    introG2Title: 'Search & Favorites',
+    introG2Desc: 'Easily filter and find saved clips, and pin important templates to access them quickly.',
+    introG3Title: 'Custom Keyboard',
+    introG3Desc: 'Use the custom keyboard to access and paste clips directly inside any application.',
+    introBtn: 'Let\'s Get Started',
+  },
+  ur: {
+    brand: 'کلپ والٹ',
+    brandSub: 'پیشکش: مائنڈ کرافٹس',
+    langButton: '🌐 زبان بدلیں',
+    welcomeTitle: 'خوش آمدید',
+    welcomeSubtitle: 'ایپ کی زبان منتخب کریں',
+    enCardTitle: 'انگریزی (English)',
+    enCardDesc: 'انگریزی زبان اور معیاری خط کا انتخاب',
+    urCardTitle: 'اردو',
+    urCardDesc: 'خالص اردو انٹرفیس اور جمیل نوری نستعلیق فونٹ',
+    stepTitle: '🔒 رازداری اور ترتیبات',
+    policyTitle: 'رازداری کی پالیسی کا خلاصہ',
+    policyBullet1: 'آپ کے تمام کلپس مکمل طور پر اسی موبائل میں محفوظ رہتے ہیں۔ ہم کبھی بھی آپ کا ڈیٹا کسی سرور پر نہیں بھیجتے۔',
+    policyBullet2: 'حساس معلومات، پاس ورڈ اور کارڈ نمبرز خود بخود محفوظ اور اوجھل رکھے جاتے ہیں۔',
+    sec1: '۱۔ ایپ کی اجازتیں',
+    sec1Btn: 'اطلاعات (نوٹیفکیشن) کی اجازت دیں',
+    sec2: '۲۔ کی بورڈ سیٹ اپ (لازمی)',
+    sec2Desc: 'کلپس کو خود کار طریقے سے محفوظ کرنے کے لیے کی بورڈ کو فعال اور منتخب کرنا لازمی ہے۔ پہلے اسے ترتیبات میں فعال کریں، اور پھر اسے منتخب کریں۔',
+    kbdEnabled: '✅ کی بورڈ فعال ہے',
+    kbdEnableBtn: '⚙️ کی بورڈ فعال کریں',
+    kbdActive: '✅ کی بورڈ منتخب ہے',
+    kbdSelectBtn: '🔄 کی بورڈ منتخب کریں',
+    sec3: '۳۔ کلاؤڈ بیک اپ (اختیاری)',
+    sec3Desc: 'اپنے کلپ بورڈ ڈیٹا کو گوگل ڈرائیو پر محفوظ کریں۔ یہ ڈیٹا محفوظ رہتا ہے اور نئے موبائل پر منتقلی کے لیے کارآمد ہے۔',
+    driveConnected: '✓ گوگل ڈرائیو منسلک ہے',
+    driveDisconnect: 'منقطع کریں',
+    driveConnect: '🔗 گوگل ڈرائیو منسلک کریں',
+    sec4: '۴۔ سیکیورٹی لاک (اختیاری)',
+    sec4Title: '🔐 ایپ پر قفل لگائیں',
+    sec4Desc: 'ایپ کھولنے پر انگلی کا نشان (فنگر پرنٹ)، کوڈ یا پاس ورڈ کی تصدیق لازمی بنائیں۔',
+    sec4Enabled: 'فعال ہے',
+    sec4Enable: 'فعال کریں',
+    sec5: '۵۔ پرائیویسی موڈ کا انتخاب',
+    privacyStdTitle: 'عام رازداری',
+    privacyStdDesc: 'حساس مواد پوشیدہ رہے گا اور دستی طور پر حذف کرنے تک محفوظ رہے گا۔',
+    privacyStrictTitle: 'سخت رازداری',
+    privacyStrictDesc: 'پاس ورڈ اور خفیہ کوڈز ۵ منٹ بعد خود بخود مٹ جائیں گے۔',
+    finishBtn: 'سیٹ اپ مکمل کریں اور شروع کریں',
+    introTitle: 'کلپ والٹ میں خوش آمدید! 🎉',
+    introSub: 'آپ کا محفوظ اور ذاتی کلپ بورڈ مینیجر',
+    introG1Title: 'خودکار کاپی کا اندراج',
+    introG1Desc: 'آپ جو بھی تحریر، ربط، ای میل یا فون نمبر کاپی کریں گے وہ خود بخود متعلقہ زمرے میں محفوظ ہو جائے گا۔',
+    introG2Title: 'تلاش اور پسندیدہ کلپس',
+    introG2Desc: 'محفوظ شدہ کلپس کو باآسانی تلاش کریں، اور اہم پیغامات کو سرفہرست پن کریں۔',
+    introG3Title: 'مخصوص کی بورڈ',
+    introG3Desc: 'کسی بھی چیٹ ایپ میں اپنے کلپس براہِ راست چسپاں کرنے کے لیے کی بورڈ استعمال کریں۔',
+    introBtn: 'سیٹ اپ شروع کریں',
+  },
+};
+
 export function OnboardingWizard({ onComplete }: Props) {
   const T = useAppTheme();
   const styles = useMemo(() => getStyles(T), [T]);
@@ -221,10 +320,13 @@ export function OnboardingWizard({ onComplete }: Props) {
 
   // Render language selection card screen
   const renderLanguageSelection = () => {
+    const cur = WIZARD_TEXT[lang];
+    const textNasta = lang === 'ur' ? { fontFamily: NASTALEEQ_FONT } : {};
+
     return (
       <View style={styles.langContainer}>
-        <Text style={styles.langWelcomeTitle}>Welcome / خوش آمدید</Text>
-        <Text style={styles.langWelcomeSubtitle}>Select App Language / ایپ کی زبان منتخب کریں</Text>
+        <Text style={[styles.langWelcomeTitle, textNasta]}>{cur.welcomeTitle}</Text>
+        <Text style={[styles.langWelcomeSubtitle, textNasta]}>{cur.welcomeSubtitle}</Text>
         
         <TouchableOpacity 
           style={styles.langCard} 
@@ -234,7 +336,7 @@ export function OnboardingWizard({ onComplete }: Props) {
           <Text style={styles.langCardEmoji}>🇬🇧</Text>
           <View style={styles.langCardTextContainer}>
             <Text style={styles.langCardTitle}>English</Text>
-            <Text style={styles.langCardSubtitle}>Standard interface language and typography</Text>
+            <Text style={styles.langCardSubtitle}>{cur.enCardDesc}</Text>
           </View>
         </TouchableOpacity>
 
@@ -246,7 +348,7 @@ export function OnboardingWizard({ onComplete }: Props) {
           <Text style={styles.langCardEmoji}>🇵🇰</Text>
           <View style={styles.langCardTextContainer}>
             <Text style={[styles.langCardTitle, { fontFamily: NASTALEEQ_FONT }]}>اردو</Text>
-            <Text style={[styles.langCardSubtitle, { fontFamily: NASTALEEQ_FONT }]}>جمیل نوری نستعلیق فونٹ اور مقامی زبان کا انتخاب</Text>
+            <Text style={[styles.langCardSubtitle, { fontFamily: NASTALEEQ_FONT }]}>{cur.urCardDesc}</Text>
           </View>
         </TouchableOpacity>
       </View>
@@ -255,54 +357,50 @@ export function OnboardingWizard({ onComplete }: Props) {
 
   // Render Setup & Privacy & Permissions screen
   const renderSetupScreen = () => {
+    const cur = WIZARD_TEXT[lang];
     const textNasta = lang === 'ur' ? { fontFamily: NASTALEEQ_FONT } : {};
+
     return (
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <Text style={[styles.stepTitle, textNasta]}>
-          {lang === 'en' ? '🔒 Privacy & Setup' : '🔒 پرائیویسی اور سیٹ اپ'}
+          {cur.stepTitle}
         </Text>
 
         {/* Privacy summary card */}
         <View style={styles.privacySummaryCard}>
           <Text style={[styles.privacySummaryTitle, textNasta]}>
-            {lang === 'en' ? 'Privacy Policy Summary' : 'پرائیویسی پالیسی کا خلاصہ'}
+            {cur.policyTitle}
           </Text>
           <View style={styles.privacyBulletRow}>
             <Text style={styles.bulletIcon}>🛡️</Text>
             <Text style={[styles.privacyBulletText, textNasta]}>
-              {lang === 'en' 
-                ? 'Your clipboard clips are stored 100% locally on this device. We never upload your data to any servers.'
-                : 'آپ کے کلپ بورڈ کلپس 100٪ آپ کے اسی ڈیوائس پر محفوظ رہتے ہیں۔ ہم کبھی بھی آپ کا ڈیٹا کسی کلاؤڈ سرور پر اپلوڈ نہیں کرتے۔'}
+              {cur.policyBullet1}
             </Text>
           </View>
           <View style={styles.privacyBulletRow}>
             <Text style={styles.bulletIcon}>🔑</Text>
             <Text style={[styles.privacyBulletText, textNasta]}>
-              {lang === 'en'
-                ? 'Sensitive data like OTPs, passwords, and card numbers are automatically masked and kept secure.'
-                : 'حساس ڈیٹا جیسے او ٹی پی (OTP)، پاس ورڈ اور کارڈ نمبرز خود بخود چھپ جاتے ہیں اور محفوظ رہتے ہیں۔'}
+              {cur.policyBullet2}
             </Text>
           </View>
         </View>
 
         {/* Permissions setup section */}
         <Text style={[styles.sectionHeader, textNasta]}>
-          {lang === 'en' ? '1. App Permissions' : '۱۔ ایپ کی اجازتیں'}
+          {cur.sec1}
         </Text>
         <TouchableOpacity style={styles.permissionActionBtn} onPress={() => void requestNotificationPermission()}>
           <Text style={[styles.permissionActionText, textNasta]}>
-            {lang === 'en' ? 'Post Notifications Permission' : 'نوٹیفکیشن کی اجازت دیں'}
+            {cur.sec1Btn}
           </Text>
         </TouchableOpacity>
 
         {/* Keyboard configuration section */}
         <Text style={[styles.sectionHeader, textNasta]}>
-          {lang === 'en' ? '2. Keyboard Setup (Required)' : '۲۔ کی بورڈ سیٹ اپ (لازمی)'}
+          {cur.sec2}
         </Text>
         <Text style={[styles.sectionDesc, textNasta]}>
-          {lang === 'en'
-            ? 'Auto Clipboard capture requires the ClipVault custom keyboard. Please enable it in Settings first, then select it as active.'
-            : 'کلپس کو خود کار طریقے سے محفوظ کرنے کے لیے والٹ بورڈ کی بورڈ کو فعال اور منتخب کرنا لازمی ہے۔ پہلے اسے ترتیبات میں فعال کریں، اور پھر اسے منتخب کریں۔'}
+          {cur.sec2Desc}
         </Text>
         
         <View style={styles.keyboardBtnRow}>
@@ -311,9 +409,7 @@ export function OnboardingWizard({ onComplete }: Props) {
             onPress={() => void openKeyboardSettings()}
           >
             <Text style={[styles.kbdConfigBtnText, textNasta, kbdEnabled && { color: T.green }]}>
-              {kbdEnabled
-                ? (lang === 'en' ? '✅ Keyboard Enabled' : '✅ کی بورڈ فعال ہو گیا')
-                : (lang === 'en' ? '⚙️ Enable VaultBoard' : '⚙️ کی بورڈ فعال کریں')}
+              {kbdEnabled ? cur.kbdEnabled : cur.kbdEnableBtn}
             </Text>
           </TouchableOpacity>
           
@@ -327,21 +423,17 @@ export function OnboardingWizard({ onComplete }: Props) {
             onPress={() => void showKeyboardPicker()}
           >
             <Text style={[styles.kbdConfigBtnText, textNasta, kbdSelected && { color: T.green }]}>
-              {kbdSelected
-                ? (lang === 'en' ? '✅ Keyboard Active' : '✅ کی بورڈ منتخب ہے')
-                : (lang === 'en' ? '🔄 Select VaultBoard' : '🔄 کی بورڈ منتخب کریں')}
+              {kbdSelected ? cur.kbdActive : cur.kbdSelectBtn}
             </Text>
           </TouchableOpacity>
         </View>
 
         {/* Google Drive Backup (Optional) */}
         <Text style={[styles.sectionHeader, textNasta]}>
-          {lang === 'en' ? '3. Cloud Backup (Optional)' : '۳۔ کلاؤڈ بیک اپ (اختیاری)'}
+          {cur.sec3}
         </Text>
         <Text style={[styles.sectionDesc, textNasta]}>
-          {lang === 'en'
-            ? 'Securely back up your clipboard data to your personal Google Drive hidden app folder. Useful for restoring data on new devices.'
-            : 'اپنے کلپ بورڈ ڈیٹا کو اپنے گوگل ڈرائیو پر محفوظ کریں۔ یہ ڈیٹا ایپ کے مخصوص خفیہ فولڈر میں محفوظ ہوتا ہے جسے کوئی دوسرا نہیں پڑھ سکتا۔ نئے موبائل پر منتقلی کے لیے یہ انتہائی کارآمد ہے۔'}
+          {cur.sec3Desc}
         </Text>
         
         {gdriveEmail ? (
@@ -358,7 +450,7 @@ export function OnboardingWizard({ onComplete }: Props) {
           }}>
             <View style={{ flex: 1 }}>
               <Text style={[{ color: T.green, fontSize: 13, fontWeight: '800' }, textNasta]}>
-                {lang === 'en' ? '✓ Google Drive Connected' : '✓ گوگل ڈرائیو کنیکٹ ہو گئی'}
+                {cur.driveConnected}
               </Text>
               <Text style={{ color: T.muted, fontSize: 12, marginTop: 2 }}>{gdriveEmail}</Text>
             </View>
@@ -374,7 +466,7 @@ export function OnboardingWizard({ onComplete }: Props) {
               }}
             >
               <Text style={[{ color: T.red, fontSize: 11, fontWeight: '800' }, textNasta]}>
-                {lang === 'en' ? 'Disconnect' : 'منقطع کریں'}
+                {cur.driveDisconnect}
               </Text>
             </TouchableOpacity>
           </View>
@@ -388,7 +480,7 @@ export function OnboardingWizard({ onComplete }: Props) {
               <ActivityIndicator size="small" color={T.accent} />
             ) : (
               <Text style={[styles.permissionActionText, { color: T.accent }, textNasta]}>
-                {lang === 'en' ? '🔗 Connect Google Drive' : '🔗 گوگل ڈرائیو کنیکٹ کریں'}
+                {cur.driveConnect}
               </Text>
             )}
           </TouchableOpacity>
@@ -396,7 +488,7 @@ export function OnboardingWizard({ onComplete }: Props) {
 
         {/* Security Lock option */}
         <Text style={[styles.sectionHeader, textNasta]}>
-          {lang === 'en' ? '4. Security Lock (Optional)' : '۴۔ سیکیورٹی لاک (اختیاری)'}
+          {cur.sec4}
         </Text>
         
         <View style={{
@@ -412,12 +504,10 @@ export function OnboardingWizard({ onComplete }: Props) {
         }}>
           <View style={{ flex: 1, paddingRight: 10 }}>
             <Text style={[{ color: T.text, fontSize: 15, fontWeight: '800' }, textNasta]}>
-              {lang === 'en' ? '🔐 App Lock' : '🔐 ایپ لاک'}
+              {cur.sec4Title}
             </Text>
-            <Text style={{ color: T.muted, fontSize: 12, marginTop: 4 }}>
-              {lang === 'en'
-                ? 'Require phone fingerprint, PIN, pattern, or passcode on launch.'
-                : 'ایپ کھولنے پر فون فنگر پرنٹ، پن، پیٹرن، یا پاس کوڈ کا مطالبہ کریں۔'}
+            <Text style={[{ color: T.muted, fontSize: 12, marginTop: 4 }, textNasta]}>
+              {cur.sec4Desc}
             </Text>
           </View>
           <TouchableOpacity 
@@ -433,7 +523,7 @@ export function OnboardingWizard({ onComplete }: Props) {
                   } else {
                     if ('error' in result && result.error === 'not_enrolled') {
                       Alert.alert(
-                        lang === 'en' ? 'No Device Lock Set' : 'ڈیوائس لاک سیٹ نہیں ہے',
+                        lang === 'en' ? 'No Device Lock Set' : 'کوئی لاک سیٹ نہیں ہے',
                         lang === 'en'
                           ? 'Please enable a PIN, pattern, password, or biometric lock in your phone settings first.'
                           : 'براہِ کرم پہلے اپنے فون کی ترتیبات میں پن، پیٹرن، پاس ورڈ، یا فنگر پرنٹ لاک فعال کریں۔'
@@ -458,38 +548,37 @@ export function OnboardingWizard({ onComplete }: Props) {
             }}
           >
             <Text style={[{ color: '#fff', fontSize: 13, fontWeight: '800' }, textNasta]}>
-              {appLockEnabled 
-                ? (lang === 'en' ? 'Enabled' : 'فعال ہے') 
-                : (lang === 'en' ? 'Enable' : 'فعال کریں')}
+              {appLockEnabled ? cur.sec4Enabled : cur.sec4Enable}
             </Text>
           </TouchableOpacity>
         </View>
 
         {/* Privacy Mode choice */}
         <Text style={[styles.sectionHeader, textNasta]}>
-          {lang === 'en' ? '5. Select Privacy Mode' : '۵۔ پرائیویسی موڈ کا انتخاب'}
+          {cur.sec5}
         </Text>
         <PrivacyChoice
           active={privacyMode === 'standard'}
-          title={lang === 'en' ? 'Standard Privacy' : 'معمول کی پرائیویسی'}
-          desc={lang === 'en' ? 'Mask sensitive clips but keep them until you manually delete them.' : 'حساس کلپس ماسک رہیں گی اور دستی طور پر حذف کرنے تک محفوظ رہیں گی۔'}
+          title={cur.privacyStdTitle}
+          desc={cur.privacyStdDesc}
           onPress={() => setPrivacyMode('standard')}
           T={T}
           nasta={nasta}
         />
         <PrivacyChoice
           active={privacyMode === 'strict'}
-          title={lang === 'en' ? 'Strict Privacy' : 'سخت پرائیویسی'}
-          desc={lang === 'en' ? 'Mask OTP/passwords and automatically delete sensitive clips after 5 minutes.' : 'او ٹی پی اور پاس ورڈز خود کار طریقے سے چھپیں گے اور ۵ منٹ بعد خود بخود مٹ جائیں گے۔'}
+          title={cur.privacyStrictTitle}
+          desc={cur.privacyStrictDesc}
           onPress={() => setPrivacyMode('strict')}
           T={T}
           nasta={nasta}
         />
 
         <PrimaryButton 
-          label={lang === 'en' ? 'Finish Setup & Start' : 'سیٹ اپ مکمل کریں اور شروع کریں'} 
+          label={cur.finishBtn} 
           onPress={() => void finishSetup()} 
           T={T} 
+          nasta={nasta}
         />
       </ScrollView>
     );
@@ -497,16 +586,18 @@ export function OnboardingWizard({ onComplete }: Props) {
 
   // Render app introduction and guide inside a popup Modal overlay
   const renderIntroModal = () => {
+    const cur = WIZARD_TEXT[lang];
     const textNasta = lang === 'ur' ? { fontFamily: NASTALEEQ_FONT } : {};
+
     return (
       <Modal visible={isIntroVisible} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={[styles.modalTitle, textNasta]}>
-              {lang === 'en' ? 'Welcome to ClipVault! 🎉' : 'ClipVault میں خوش آمدید! 🎉'}
+              {cur.introTitle}
             </Text>
             <Text style={[styles.modalSubtitle, textNasta]}>
-              {lang === 'en' ? 'Your local secure clipboard manager' : 'آپ کا مقامی اور محفوظ کلپ بورڈ مینیجر'}
+              {cur.introSub}
             </Text>
 
             <ScrollView style={styles.modalScroll} showsVerticalScrollIndicator={false}>
@@ -514,12 +605,10 @@ export function OnboardingWizard({ onComplete }: Props) {
                 <Text style={styles.guideStepIcon}>📋</Text>
                 <View style={styles.guideStepTextWrap}>
                   <Text style={[styles.guideStepTitle, textNasta]}>
-                    {lang === 'en' ? 'Auto Copy Capture' : 'خودکار کاپی کیپچر'}
+                    {cur.introG1Title}
                   </Text>
                   <Text style={[styles.guideStepDesc, textNasta]}>
-                    {lang === 'en' 
-                      ? 'Any text, links, emails, and phone numbers you copy are saved locally into searchable categories.'
-                      : 'متن، لنکس، ای میلز اور فون نمبرز جو بھی آپ کاپی کریں گے، وہ زمرہ جات کے مطابق خود بخود محفوظ ہو جائیں گے۔'}
+                    {cur.introG1Desc}
                   </Text>
                 </View>
               </View>
@@ -528,12 +617,10 @@ export function OnboardingWizard({ onComplete }: Props) {
                 <Text style={styles.guideStepIcon}>📁</Text>
                 <View style={styles.guideStepTextWrap}>
                   <Text style={[styles.guideStepTitle, textNasta]}>
-                    {lang === 'en' ? 'Bilingual Search & Pins' : 'تلاش اور پسندیدہ کلپس'}
+                    {cur.introG2Title}
                   </Text>
                   <Text style={[styles.guideStepDesc, textNasta]}>
-                    {lang === 'en'
-                      ? 'Easily filter and find saved replies, and pin important templates to access them quickly.'
-                      : 'محفوظ کردہ کلپس کو آسانی سے تلاش کریں، اور اہم کلپس کو پن کریں تاکہ وہ سرفہرست رہیں۔'}
+                    {cur.introG2Desc}
                   </Text>
                 </View>
               </View>
@@ -542,12 +629,10 @@ export function OnboardingWizard({ onComplete }: Props) {
                 <Text style={styles.guideStepIcon}>⌨️</Text>
                 <View style={styles.guideStepTextWrap}>
                   <Text style={[styles.guideStepTitle, textNasta]}>
-                    {lang === 'en' ? 'VaultBoard Keyboard' : 'والٹ بورڈ کی بورڈ'}
+                    {cur.introG3Title}
                   </Text>
                   <Text style={[styles.guideStepDesc, textNasta]}>
-                    {lang === 'en'
-                      ? 'Use the VaultBoard custom keyboard to copy/paste clips directly inside any chat application.'
-                      : 'کسی بھی چیٹ ایپ میں کلپس تک براہِ راست رسائی اور پیسٹ کرنے کے لیے والٹ بورڈ کی بورڈ استعمال کریں۔'}
+                    {cur.introG3Desc}
                   </Text>
                 </View>
               </View>
@@ -559,7 +644,7 @@ export function OnboardingWizard({ onComplete }: Props) {
               activeOpacity={0.85}
             >
               <Text style={[sharedStyles.primaryButtonText, textNasta]}>
-                {lang === 'en' ? 'Understood / Let\'s Setup' : 'سمجھ گیا / سیٹ اپ شروع کریں'}
+                {cur.introBtn}
               </Text>
             </TouchableOpacity>
           </View>
@@ -568,20 +653,20 @@ export function OnboardingWizard({ onComplete }: Props) {
     );
   };
 
-
+  const cur = WIZARD_TEXT[lang];
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: T.bg }]}>
       <View style={styles.top}>
         <Image source={require('../assets/splash-icon.png')} style={styles.logo} />
         <View style={{ flex: 1 }}>
-          <Text style={styles.brand}>ClipVault</Text>
-          <Text style={styles.brandSub}>by MindCrafts_AI</Text>
+          <Text style={[styles.brand, nasta ? { fontFamily: nasta } : {}]}>{cur.brand}</Text>
+          <Text style={[styles.brandSub, nasta ? { fontFamily: nasta } : {}]}>{cur.brandSub}</Text>
         </View>
         {step > 0 && (
           <TouchableOpacity style={styles.langResetBtn} onPress={() => setStep(0)}>
             <Text style={[styles.langResetText, nasta ? { fontFamily: nasta } : {}]}>
-              {lang === 'en' ? '🌐 Language' : '🌐 زبان'}
+              {cur.langButton}
             </Text>
           </TouchableOpacity>
         )}
@@ -596,10 +681,10 @@ export function OnboardingWizard({ onComplete }: Props) {
   );
 }
 
-function PrimaryButton({ label, onPress, T }: { label: string; onPress: () => void; T: ThemeColors }) {
+function PrimaryButton({ label, onPress, T, nasta }: { label: string; onPress: () => void; T: ThemeColors; nasta?: string }) {
   return (
     <TouchableOpacity style={[sharedStyles.primaryButton, { backgroundColor: T.accent }]} onPress={onPress} activeOpacity={0.85}>
-      <Text style={sharedStyles.primaryButtonText}>{label}</Text>
+      <Text style={[sharedStyles.primaryButtonText, nasta ? { fontFamily: nasta } : {}]}>{label}</Text>
     </TouchableOpacity>
   );
 }

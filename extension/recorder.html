@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ur">
+<head>
+  <meta charset="UTF-8">
+  <title>ClipVault Recorder</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Noto+Nastaliq+Urdu:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-main: #0b0f19;
+      --bg-card: rgba(22, 30, 49, 0.7);
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --danger: #ef4444;
+      --danger-hover: #dc2626;
+      --text-primary: #f3f4f6;
+      --text-secondary: #9ca3af;
+      --border-color: rgba(255, 255, 255, 0.08);
+    }
+
+    body {
+      margin: 0;
+      background-color: var(--bg-main);
+      color: var(--text-primary);
+      font-family: 'Inter', 'Noto Nastaliq Urdu', -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      direction: rtl;
+    }
+
+    .container {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 30px;
+      max-width: 450px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(10px);
+    }
+
+    h2 {
+      font-size: 20px;
+      margin-top: 0;
+      margin-bottom: 12px;
+      color: #fff;
+    }
+
+    p {
+      font-size: 14px;
+      color: var(--text-secondary);
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    .btn {
+      background-color: var(--danger);
+      color: white;
+      border: none;
+      padding: 12px 30px;
+      font-size: 16px;
+      font-weight: 600;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+      font-family: inherit;
+    }
+
+    .btn:hover {
+      background-color: var(--danger-hover);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
+    }
+
+    .btn:active {
+      transform: translateY(0);
+    }
+
+    /* Active Recording UI */
+    #recording-ui {
+      display: none;
+    }
+
+    .pulse-indicator {
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: var(--danger);
+      margin: 0 auto 16px auto;
+      animation: pulse 1s infinite;
+      box-shadow: 0 0 12px var(--danger);
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(1.25); }
+    }
+
+    #timer {
+      font-size: 36px;
+      font-weight: 700;
+      color: var(--danger);
+      margin-bottom: 12px;
+      font-feature-settings: "tnum";
+    }
+
+    #status {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- State 1: Manual Trigger Fallback (Shown if auto-start is blocked) -->
+    <div id="setup-ui">
+      <h2>اسکرین ریکارڈنگ کی تیاری</h2>
+      <p>ریکارڈنگ کا آغاز کرنے کے لیے نیچے دیئے گئے بٹن پر کلک کریں اور مطلوبہ اسکرین یا ٹیب کو منتخب کریں۔</p>
+      <button class="btn" id="btnStart">ریکارڈنگ شروع کریں ⏺️</button>
+    </div>
+
+    <!-- State 2: Active Recording Progress -->
+    <div id="recording-ui">
+      <div class="pulse-indicator"></div>
+      <div id="timer">00:00</div>
+      <p style="margin-bottom: 12px; color: #fff; font-weight: 600;">سکرین ریکارڈ ہو رہی ہے...</p>
+      <div id="status">تیاری کی جا رہی ہے...</div>
+    </div>
+  </div>
+
+  <script src="recorder.js"></script>
+</body>
+</html>

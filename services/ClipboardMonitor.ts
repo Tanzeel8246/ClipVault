@@ -8,7 +8,7 @@
 import * as Clipboard from 'expo-clipboard';
 import * as Notifications from 'expo-notifications';
 import { AppState, Platform } from 'react-native';
-import { Categorizer, DatabaseService, SensitiveDetector } from './CoreServices';
+import { Categorizer, DatabaseService, SensitiveDetector, countWords } from './CoreServices';
 import { GoogleDriveBackupService } from './GoogleDriveBackup';
 import { KeyboardMirror } from './KeyboardMirror';
 import { ClipItem } from './types';
@@ -37,11 +37,6 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
-
-const countWords = (value: string) => {
-  const text = value.trim();
-  return text ? text.split(/\s+/).length : 0;
-};
 
 async function readClipboard(): Promise<string> {
   try {

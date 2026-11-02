@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "ClipVault — Urdu Web Customizer & Sync",
+  "version": "1.0.0",
+  "description": "Auto-save clipboard history, sync with Google Drive, and customize websites with 10+ premium Urdu fonts.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs",
+    "scripting",
+    "identity",
+    "downloads",
+    "alarms"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "assets/icon-16.png",
+      "48": "assets/icon-48.png",
+      "128": "assets/icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "assets/icon-16.png",
+    "48": "assets/icon-48.png",
+    "128": "assets/icon-128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["recorder.html", "recorder.js", "inject.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "commands": {
+    "stop-recording": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "MacCtrl+Shift+S"
+      },
+      "description": "Stop active screen recording"
+    }
+  }
+}

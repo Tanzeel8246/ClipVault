@@ -120,8 +120,8 @@ android {
         applicationId 'com.clipvault.mobile'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 11
-        versionName "1.1.8"
+        versionCode 25
+        versionName "1.3.0"
     }
     signingConfigs {
         debug {
@@ -217,8 +217,8 @@ tasks.register("verifyPlayReleaseConfig") {
         if (!hasReleaseSigning) {
             throw new GradleException("Play release signing is not configured. Set CLIPVAULT_RELEASE_STORE_FILE, CLIPVAULT_RELEASE_STORE_PASSWORD, CLIPVAULT_RELEASE_KEY_ALIAS, and CLIPVAULT_RELEASE_KEY_PASSWORD before uploading to Play Console.")
         }
-        if (android.defaultConfig.targetSdkVersion.apiLevel < 35) {
-            throw new GradleException("Play release must target Android 15 / API 35 or higher.")
+        if (android.defaultConfig.targetSdkVersion.apiLevel < 36) {
+            throw new GradleException("Play release must target Android 16 / API 36 or higher.")
         }
         if (android.defaultConfig.versionCode < 2) {
             throw new GradleException("Play release versionCode must be incremented.")
@@ -227,10 +227,53 @@ tasks.register("verifyPlayReleaseConfig") {
     }
 }
 
+tasks.register("patchRelease16Kb") {
+    doLast {
+        def aabFile = file("${projectDir}/build/outputs/bundle/release/app-release.aab")
+        if (!aabFile.exists()) {
+            aabFile = file("${buildDir}/outputs/bundle/release/app-release.aab")
+        }
+        def keystoreFile = file("${projectDir}/release.keystore")
+        def scriptFile = file("${rootDir}/scripts/patch_16kb.py")
+        if (aabFile.exists() && scriptFile.exists()) {
+            println("Running 16KB Page Size & Play Store patcher on AAB: " + aabFile.absolutePath)
+            exec {
+                commandLine("python", scriptFile.absolutePath, aabFile.absolutePath, keystoreFile.absolutePath, "mindcrafts123", "clipvault-alias", "mindcrafts123")
+            }
+        } else {
+            println("patchRelease16Kb: aab=${aabFile.absolutePath} (exists: ${aabFile.exists()}), script=${scriptFile.absolutePath} (exists: ${scriptFile.exists()})")
+        }
+    }
+}
+
 tasks.whenTaskAdded { task ->
     if (task.name == "createBundleReleaseJsAndAssets") {
         task.dependsOn("generateReleaseBuildConfig")
         task.dependsOn("buildKotlinToolingMetadata")
         task.dependsOn(":expo-constants:createExpoConfig")
+        task.dependsOn(":expo:packageReleaseResources")
+        task.dependsOn(":expo:generateReleaseResValues")
+        task.dependsOn(":expo:generateReleaseBuildConfig")
+        task.dependsOn(":expo:processReleaseManifest")
+        task.dependsOn(":expo:mergeReleaseJniLibFolders")
+        task.mustRunAfter(":expo:packageReleaseResources")
+        task.mustRunAfter(":expo:generateReleaseResValues")
+        task.mustRunAfter(":expo:generateReleaseBuildConfig")
+        task.mustRunAfter(":expo:processReleaseManifest")
+        task.mustRunAfter(":expo:mergeReleaseJniLibFolders")
+    }
+    if (task.name == "signReleaseBundle") {
+        task.finalizedBy("patchRelease16Kb")
+    }
+}
+
+afterEvaluate {
+    def bundleReleaseTask = tasks.findByName("createBundleReleaseJsAndAssets")
+    if (bundleReleaseTask != null) {
+        rootProject.subprojects.each { subproject ->
+            if (subproject != project) {
+                bundleReleaseTask.mustRunAfter(subproject.tasks)
+            }
+        }
     }
 }

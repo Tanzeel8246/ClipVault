@@ -17,16 +17,16 @@
       "amberDim": "#f59e0b22"
     },
     "keyboard": {
-      "background": "#1b1b20",
-      "surface": "#222329",
-      "key": "#373840",
-      "specialKey": "#4a536b",
-      "text": "#f0f2f7",
-      "muted": "#aaaeba",
-      "accent": "#e7ecff",
-      "stroke": "#3c3d46",
-      "radius": 6,
-      "elevation": 1.0
+      "background": "#080810",
+      "surface": "#0d0d1a",
+      "key": "#181828",
+      "specialKey": "#222238",
+      "text": "#e2e2f0",
+      "muted": "#757599",
+      "accent": "#6366f1",
+      "stroke": "#262640",
+      "radius": 8,
+      "elevation": 1.5
     }
   },
   "SOFT_IVORY": {

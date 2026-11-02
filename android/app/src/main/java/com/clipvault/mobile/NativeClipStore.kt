@@ -2,6 +2,7 @@ package com.clipvault.mobile
 
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
+import android.util.Log
 import java.io.File
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
@@ -43,16 +44,32 @@ object NativeClipStore {
     finally { db.close() }
   }
 
+  // ─── Direct Boot Protection (Device-Protected Storage on Android 7.0+) ─────
+  fun getSafeContext(context: Context): Context {
+    return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+      if (context.isDeviceProtectedStorage) {
+        context
+      } else {
+        context.createDeviceProtectedStorageContext() ?: context
+      }
+    } else {
+      context
+    }
+  }
+
+  private fun getSafePrefs(context: Context): android.content.SharedPreferences {
+    return getSafeContext(context).getSharedPreferences(KEYBOARD_PREFS, Context.MODE_PRIVATE)
+  }
+
   // ─── Keyboard-level pin helpers (stored in SharedPreferences) ───────────────
   fun getKeyboardPins(context: Context): List<String> {
-    val raw = context.getSharedPreferences(KEYBOARD_PREFS, Context.MODE_PRIVATE)
-      .getString(KEYBOARD_PINS_KEY, "") ?: ""
+    val raw = getSafePrefs(context).getString(KEYBOARD_PINS_KEY, "") ?: ""
     return if (raw.isBlank()) emptyList()
     else raw.split(PIN_SEPARATOR).filter { it.isNotBlank() }
   }
 
   fun toggleKeyboardPin(context: Context, clip: String): Boolean {
-    val prefs = context.getSharedPreferences(KEYBOARD_PREFS, Context.MODE_PRIVATE)
+    val prefs = getSafePrefs(context)
     val current = getKeyboardPins(context).toMutableList()
     val isPinned: Boolean
     if (current.contains(clip)) {
@@ -75,14 +92,13 @@ object NativeClipStore {
   private const val LEARNED_WORDS_KEY = "keyboard_learned_words"
 
   fun getLearnedWords(context: Context): List<String> {
-    val raw = context.getSharedPreferences(KEYBOARD_PREFS, Context.MODE_PRIVATE)
-      .getString(LEARNED_WORDS_KEY, "") ?: ""
+    val raw = getSafePrefs(context).getString(LEARNED_WORDS_KEY, "") ?: ""
     return if (raw.isBlank()) emptyList() else raw.split(PIN_SEPARATOR).filter { it.isNotBlank() }
   }
 
   fun addLearnedWord(context: Context, word: String) {
     if (word.length < 2 || word.length > 30) return
-    val prefs = context.getSharedPreferences(KEYBOARD_PREFS, Context.MODE_PRIVATE)
+    val prefs = getSafePrefs(context)
     val current = getLearnedWords(context).toMutableList()
     current.remove(word)
     current.add(0, word)
@@ -109,6 +125,82 @@ object NativeClipStore {
       }
       clips
     } catch (_: RuntimeException) { emptyList() }
+    finally { db.close() }
+  }
+
+  // ─── Favorites for keyboard panel ────────────────────────────────────────────
+  fun favorites(context: Context, limit: Int = 10): List<String> {
+    val db = openDb(context) ?: return emptyList()
+    return try {
+      ensureSchema(db)
+      pruneExpired(db)
+      val clips = mutableListOf<String>()
+      db.rawQuery(
+        "SELECT text FROM clips WHERE isDeleted = 0 AND isSensitive = 0 AND isFavorite = 1 ORDER BY timestamp DESC LIMIT ?",
+        arrayOf(limit.coerceIn(1, 200).toString()),
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          val value = cursor.getString(0).orEmpty()
+          if (!value.startsWith("ENC:")) clips.add(value)
+        }
+      }
+      clips
+    } catch (_: RuntimeException) { emptyList() }
+    finally { db.close() }
+  }
+
+  // ─── Category + Search combo for keyboard tabs ───────────────────────────────
+  // category: "" = all, "URL", "Phone", "Email", "Code", "Short", "Text", etc.
+  // favoritesOnly: true = only favorites tab
+  fun searchByCategory(
+    context: Context,
+    query: String,
+    category: String,
+    favoritesOnly: Boolean,
+    limit: Int = 20,
+  ): List<String> {
+    val db = openDb(context) ?: return emptyList()
+    return try {
+      ensureSchema(db)
+      pruneExpired(db)
+      val clauses = mutableListOf("isDeleted = 0", "isSensitive = 0")
+      val args = mutableListOf<String>()
+      if (favoritesOnly) clauses.add("isFavorite = 1")
+      if (category.isNotBlank()) { clauses.add("category = ?"); args.add(category) }
+      if (query.isNotBlank()) { clauses.add("text LIKE ?"); args.add("%$query%") }
+      args.add(limit.coerceIn(1, 200).toString())
+      val clips = mutableListOf<String>()
+      db.rawQuery(
+        "SELECT text FROM clips WHERE ${clauses.joinToString(" AND ")} ORDER BY isPinned DESC, timestamp DESC LIMIT ?",
+        args.toTypedArray(),
+      ).use { cursor ->
+        while (cursor.moveToNext()) {
+          val value = cursor.getString(0).orEmpty()
+          if (!value.startsWith("ENC:")) clips.add(value)
+        }
+      }
+      clips
+    } catch (_: RuntimeException) { emptyList() }
+    finally { db.close() }
+  }
+
+  // ─── Toggle favorite by text (keyboard-level, no id needed) ─────────────────
+  fun toggleFavoriteByText(context: Context, clipText: String): Boolean {
+    val db = openDb(context) ?: return false
+    return try {
+      ensureSchema(db)
+      val hash = md5(clipText.trim())
+      var nowFavorite = false
+      db.rawQuery("SELECT id, isFavorite FROM clips WHERE hash = ? LIMIT 1", arrayOf(hash)).use { cursor ->
+        if (cursor.moveToFirst()) {
+          val id = cursor.getString(0)
+          val currentlyFav = cursor.getInt(1) == 1
+          nowFavorite = !currentlyFav
+          db.execSQL("UPDATE clips SET isFavorite = ? WHERE id = ?", arrayOf<Any>(if (nowFavorite) 1 else 0, id))
+        }
+      }
+      nowFavorite
+    } catch (_: RuntimeException) { false }
     finally { db.close() }
   }
 
@@ -289,7 +381,53 @@ object NativeClipStore {
     try {
       ensureSchema(db)
       db.execSQL("UPDATE clips SET isDeleted = 1 WHERE id = ?", arrayOf<Any>(id))
-    } catch (_: RuntimeException) { }
+    } catch (e: Exception) { Log.w("NativeClipStore", "DB operation error", e) }
+    finally {
+      db.close()
+      rebuildKeyboardMirror(context)
+    }
+  }
+
+  fun bulkDelete(context: Context, ids: List<String>) {
+    if (ids.isEmpty()) return
+    val db = openDb(context) ?: return
+    try {
+      ensureSchema(db)
+      val placeholders = ids.joinToString(",") { "?" }
+      db.execSQL("UPDATE clips SET isDeleted = 1 WHERE id IN ($placeholders)", ids.toTypedArray())
+    } catch (e: Exception) { Log.w("NativeClipStore", "DB operation error", e) }
+    finally {
+      db.close()
+      rebuildKeyboardMirror(context)
+    }
+  }
+
+  fun bulkPin(context: Context, ids: List<String>, value: Boolean) {
+    if (ids.isEmpty()) return
+    val db = openDb(context) ?: return
+    try {
+      ensureSchema(db)
+      val placeholders = ids.joinToString(",") { "?" }
+      val flag = if (value) 1 else 0
+      val args = (listOf<Any>(flag) + ids).toTypedArray()
+      db.execSQL("UPDATE clips SET isPinned = ? WHERE id IN ($placeholders)", args)
+    } catch (e: Exception) { Log.w("NativeClipStore", "DB operation error", e) }
+    finally {
+      db.close()
+      rebuildKeyboardMirror(context)
+    }
+  }
+
+  fun bulkFavorite(context: Context, ids: List<String>, value: Boolean) {
+    if (ids.isEmpty()) return
+    val db = openDb(context) ?: return
+    try {
+      ensureSchema(db)
+      val placeholders = ids.joinToString(",") { "?" }
+      val flag = if (value) 1 else 0
+      val args = (listOf<Any>(flag) + ids).toTypedArray()
+      db.execSQL("UPDATE clips SET isFavorite = ? WHERE id IN ($placeholders)", args)
+    } catch (e: Exception) { Log.w("NativeClipStore", "DB operation error", e) }
     finally {
       db.close()
       rebuildKeyboardMirror(context)
@@ -301,7 +439,7 @@ object NativeClipStore {
     try {
       ensureSchema(db)
       db.execSQL("UPDATE clips SET isDeleted = 1 WHERE isDeleted = 0")
-    } catch (_: RuntimeException) { }
+    } catch (e: Exception) { Log.w("NativeClipStore", "DB operation error", e) }
     finally {
       db.close()
       rebuildKeyboardMirror(context)
@@ -365,17 +503,45 @@ object NativeClipStore {
     finally { db.close() }
   }
 
-  private fun openDb(context: Context): SQLiteDatabase? = try {
-    SQLiteDatabase.openOrCreateDatabase(databaseFile(context), null)
-  } catch (_: RuntimeException) { null }
+  private fun openDb(context: Context): SQLiteDatabase? {
+    val safeCtx = getSafeContext(context)
+    val dbFile = databaseFile(context)
+    return try {
+      if (dbFile.exists()) {
+        SQLiteDatabase.openOrCreateDatabase(dbFile, null)
+      } else {
+        val safeDb = databaseFile(safeCtx)
+        SQLiteDatabase.openOrCreateDatabase(safeDb, null)
+      }
+    } catch (_: Exception) {
+      try {
+        val safeDb = databaseFile(safeCtx)
+        SQLiteDatabase.openOrCreateDatabase(safeDb, null)
+      } catch (_: Exception) {
+        null
+      }
+    }
+  }
 
   private fun databaseFile(context: Context): File {
-    val directory = File(context.filesDir, "SQLite")
+    val baseDir = try {
+      context.filesDir
+    } catch (_: Exception) {
+      getSafeContext(context).filesDir
+    }
+    val directory = File(baseDir, "SQLite")
     if (!directory.exists()) directory.mkdirs()
     return File(directory, DB_NAME)
   }
 
-  private fun mirrorFile(context: Context): File = File(context.filesDir, KEYBOARD_MIRROR_FILE)
+  private fun mirrorFile(context: Context): File {
+    val baseDir = try {
+      getSafeContext(context).filesDir
+    } catch (_: Exception) {
+      context.filesDir
+    }
+    return File(baseDir, KEYBOARD_MIRROR_FILE)
+  }
 
   private fun readKeyboardMirror(context: Context, limit: Int): List<String> {
     return try {
@@ -432,7 +598,7 @@ object NativeClipStore {
     }
   }
 
-  fun updateText(context: Context, id: String, value: String): Boolean {
+  fun updateText(context: Context, id: String, value: String, category: String, sensitive: Boolean): Boolean {
     val text = value.trim()
     if (text.isBlank()) return false
     val db = openDb(context) ?: return false
@@ -440,16 +606,17 @@ object NativeClipStore {
       ensureSchema(db)
       val hash = md5(text)
       val sensitiveType = detectSensitiveType(text)
-      val sensitive = sensitiveType != null
+      val finalSensitive = sensitive || sensitiveType != null
+      val finalCategory = category.ifBlank { detectCategory(text) }
       db.execSQL(
         "UPDATE clips SET text=?, hash=?, category=?, wordCount=?, charCount=?, isSensitive=?, sensitiveType=? WHERE id=?",
         arrayOf<Any>(
           text,
           hash,
-          detectCategory(text),
+          finalCategory,
           countWords(text),
           text.length,
-          if (sensitive) 1 else 0,
+          if (finalSensitive) 1 else 0,
           sensitiveType ?: "",
           id,
         )
@@ -493,6 +660,8 @@ object NativeClipStore {
     db.execSQL("CREATE INDEX IF NOT EXISTS idx_favorite ON clips(isFavorite)")
     db.execSQL("CREATE INDEX IF NOT EXISTS idx_hash ON clips(hash)")
     db.execSQL("CREATE INDEX IF NOT EXISTS idx_sensitive ON clips(isSensitive)")
+    db.execSQL("CREATE INDEX IF NOT EXISTS idx_deleted ON clips(isDeleted)")
+    db.execSQL("CREATE INDEX IF NOT EXISTS idx_pinned ON clips(isPinned)")
   }
 
   private fun pruneExpired(db: SQLiteDatabase) {

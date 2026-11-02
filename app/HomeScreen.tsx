@@ -14,18 +14,24 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   FlatList,
   Image,
   Modal,
+  KeyboardAvoidingView,
+  Platform,
   RefreshControl,
   StatusBar,
   StyleSheet,
   Text,
   TextInput,
+  Switch,
   TouchableOpacity,
   View,
+  Share,
+  ScrollView,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import * as Clipboard from 'expo-clipboard';
@@ -33,7 +39,7 @@ import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { openKeyboardSettings, startBackgroundMonitor } from '../services/BackgroundMonitor';
 import { ClipboardMonitor } from '../services/ClipboardMonitor';
-import { DatabaseService, Exporter } from '../services/CoreServices';
+import { DatabaseService, Exporter, getErrorMessage, readSettings } from '../services/CoreServices';
 import { GoogleDriveBackupService } from '../services/GoogleDriveBackup';
 import { NASTALEEQ_FONT, t } from '../services/i18n';
 import { useAppTheme } from '../theme/useAppTheme';
@@ -44,25 +50,11 @@ import { useClipStore } from '../store/useClipStore';
 import { CATEGORIES, getCategoryColors } from '../components/CategoryUtils';
 import { ClipCard } from '../components/ClipCard';
 import { EmptyState } from '../components/EmptyState';
+import { SkeletonCard } from '../components/SkeletonCard';
 import { Toast } from '../components/Toast';
-
-// ─────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────
-async function readSettings(): Promise<ClipSettings> {
-  try {
-    const saved = await AsyncStorage.getItem(SETTINGS_KEY);
-    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
-  } catch {
-    return DEFAULT_SETTINGS;
-  }
-}
-
-
-
-function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'کچھ غلط ہو گیا۔';
-}
+import { PinManagerModal } from '../components/PinManagerModal';
+import { ReviewPromptModal } from '../components/ReviewPromptModal';
+import { ReviewService } from '../services/ReviewService';
 
 // ─────────────────────────────────────────────────────────────
 // Main HomeScreen
@@ -91,10 +83,18 @@ export default function HomeScreen() {
   const deleteClip = useClipStore(state => state.deleteClip);
   const showToast = useClipStore(state => state.showToast);
   const updateSetting = useClipStore(state => state.updateSetting);
+  const isLoadingMore = useClipStore(state => state.isLoadingMore);
+  const loadMoreClips = useClipStore(state => state.loadMoreClips);
+  const mergeSelectedClips = useClipStore(state => state.mergeSelectedClips);
 
   const [maskSensitive, setMaskSensitive] = useState(true);
   const [showExport, setShowExport] = useState(false);
+  const [pinPromptVisible, setPinPromptVisible] = useState(false);
   const showDisclosure = settings.privacyDisclosureAccepted === false;
+
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [reviewPromptVisible, setReviewPromptVisible] = useState(false);
 
   const loadClipsRef = useRef(loadClips);
   useEffect(() => {
@@ -125,6 +125,16 @@ export default function HomeScreen() {
         if (settings.googleDriveBackupEnabled) {
           GoogleDriveBackupService.queueAutoBackup();
         }
+
+        // Check 3-4 days in-app review prompt
+        try {
+          const shouldPrompt = await ReviewService.checkShouldPromptReview();
+          if (active && shouldPrompt) {
+            setTimeout(() => {
+              if (active) setReviewPromptVisible(true);
+            }, 2500);
+          }
+        } catch {}
 
         if (settings.monitoringEnabled) {
           await ClipboardMonitor.startMonitoring(
@@ -201,20 +211,24 @@ export default function HomeScreen() {
   const addClip = useClipStore(state => state.addClip);
   const updateClipText = useClipStore(state => state.updateClipText);
   const toggleSensitive = useClipStore(state => state.toggleSensitive);
+  const loading = useClipStore(state => state.isLoading);
 
   const [editorVisible, setEditorVisible] = useState(false);
   const [editingClip, setEditingClip] = useState<ClipItem | null>(null);
   const [editorText, setEditorText] = useState('');
+  const [isTemplate, setIsTemplate] = useState(false);
 
   const handleOpenAdd = () => {
     setEditingClip(null);
     setEditorText('');
+    setIsTemplate(false);
     setEditorVisible(true);
   };
 
   const handleOpenEdit = (clip: ClipItem) => {
     setEditingClip(clip);
     setEditorText(clip.text);
+    setIsTemplate(clip.category === 'Template');
     setEditorVisible(true);
   };
 
@@ -226,17 +240,38 @@ export default function HomeScreen() {
     }
 
     try {
+      const forceCategory = isTemplate ? 'Template' : undefined;
       if (editingClip) {
-        await updateClipText(editingClip.id, text);
+        if (editingClip.text !== text) {
+          const oldHistory = editingClip.history || [];
+          editingClip.history = [editingClip.text, ...oldHistory].slice(0, 5);
+        }
+        await updateClipText(editingClip.id, text, forceCategory);
         showToast(lang === 'en' ? '📝 Clip updated' : '📝 کلپ اپڈیٹ ہو گئی');
       } else {
-        await addClip(text);
+        await addClip(text, forceCategory);
         showToast(lang === 'en' ? '✅ Clip added' : '✅ کلپ محفوظ ہو گئی');
       }
       setEditorVisible(false);
     } catch (err) {
       Alert.alert(lang === 'en' ? 'Save Failed' : 'محفوظ کرنا ناکام', getErrorMessage(err));
     }
+  };
+
+  const handleRateNow = async () => {
+    setReviewPromptVisible(false);
+    await ReviewService.recordReviewCompleted();
+    await ReviewService.openPlayStore();
+  };
+
+  const handleReviewLater = async () => {
+    setReviewPromptVisible(false);
+    await ReviewService.snoozeReviewPrompt();
+  };
+
+  const handleAlreadyReviewed = async () => {
+    setReviewPromptVisible(false);
+    await ReviewService.recordReviewCompleted();
   };
 
   const handleMarkNormal = (id: string) => {
@@ -258,33 +293,158 @@ export default function HomeScreen() {
     );
   };
 
+  const [lastDeletedClip, setLastDeletedClip] = useState<ClipItem | null>(null);
+  const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const handleDelete = (id: string) => {
-    Alert.alert(t('delete', lang), lang === 'en' ? 'Are you sure you want to permanently delete this clip?' : 'کیا آپ اس کلپ کو ہمیشہ کے لیے حذف کرنا چاہتے ہیں؟', [
+    const clipToDelete = clips.find(c => c.id === id);
+    if (!clipToDelete) return;
+
+    Alert.alert(t('delete', lang), lang === 'en' ? 'Are you sure you want to delete this clip?' : 'کیا آپ اس کلپ کو حذف کرنا چاہتے ہیں؟', [
       { text: t('cancel', lang), style: 'cancel' },
       {
         text: t('delete', lang),
         style: 'destructive',
         onPress: async () => {
+          setLastDeletedClip(clipToDelete);
           await deleteClip(id);
-          showToast(lang === 'en' ? '🗑️ Clip deleted' : '🗑️ کلپ حذف ہو گئی');
+          if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+          undoTimeoutRef.current = setTimeout(() => {
+            setLastDeletedClip(null);
+          }, 30000);
         },
       },
     ]);
   };
 
-  const exportClips = async (format: 'txt' | 'csv' | 'pdf') => {
+  const handleUndoDelete = async () => {
+    if (!lastDeletedClip) return;
+    const restored = lastDeletedClip;
+    setLastDeletedClip(null);
+    if (undoTimeoutRef.current) clearTimeout(undoTimeoutRef.current);
+    await addClip(restored.text, restored.category);
+    showToast(lang === 'en' ? '↩️ Clip restored' : '↩️ کلپ بحال کر دی گئی');
+  };
+
+  const toggleSelection = (id: string) => {
+    setSelectedIds(prev => {
+      if (prev.includes(id)) {
+        const next = prev.filter(i => i !== id);
+        if (next.length === 0) setSelectionMode(false);
+        return next;
+      }
+      return [...prev, id];
+    });
+  };
+
+  const handleLongPressCard = (id: string) => {
+    if (!selectionMode) {
+      setSelectionMode(true);
+      setSelectedIds([id]);
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    }
+  };
+
+  const cancelSelection = () => {
+    setSelectionMode(false);
+    setSelectedIds([]);
+  };
+
+  const handleBulkDelete = () => {
+    Alert.alert(t('delete', lang), lang === 'en' ? `Delete ${selectedIds.length} clips?` : `کیا آپ ${selectedIds.length} کلپس حذف کرنا چاہتے ہیں؟`, [
+      { text: t('cancel', lang), style: 'cancel' },
+      {
+        text: t('delete', lang),
+        style: 'destructive',
+        onPress: async () => {
+          await useClipStore.getState().bulkDelete(selectedIds);
+          const count = selectedIds.length;
+          cancelSelection();
+          showToast(lang === 'en' ? `🗑️ Deleted ${count} clips` : `🗑️ ${count} کلپس حذف ہو گئیں`);
+        },
+      },
+    ]);
+  };
+
+  const handleBulkPin = async () => {
+    await useClipStore.getState().bulkPin(selectedIds, true);
+    const count = selectedIds.length;
+    cancelSelection();
+    showToast(lang === 'en' ? `📌 Pinned ${count} clips` : `📌 ${count} کلپس پن ہو گئیں`);
+  };
+
+  const handleBulkFav = async () => {
+    await useClipStore.getState().bulkFavorite(selectedIds, true);
+    const count = selectedIds.length;
+    cancelSelection();
+    showToast(lang === 'en' ? `⭐ Favorited ${count} clips` : `⭐ ${count} کلپس پسندیدہ ہو گئیں`);
+  };
+
+  const handleBulkCopy = async () => {
+    const selectedTexts = clips.filter(c => selectedIds.includes(c.id)).map(c => c.text).join('\n\n');
+    await Clipboard.setStringAsync(selectedTexts);
+    const count = selectedIds.length;
+    cancelSelection();
+    showToast(lang === 'en' ? `📋 Copied ${count} clips` : `📋 ${count} کلپس کاپی ہو گئیں`);
+  };
+
+  const handleBulkShare = async () => {
+    const selectedTexts = clips.filter(c => selectedIds.includes(c.id)).map(c => c.text).join('\n\n');
     try {
-      const all = await DatabaseService.getAllForExport();
-      if (!all.length) {
+      await Share.share({ message: selectedTexts });
+      const count = selectedIds.length;
+      cancelSelection();
+      showToast(lang === 'en' ? `📤 Shared ${count} clips` : `📤 ${count} کلپس شیئر ہو گئیں`);
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  const handleBulkMerge = () => {
+    if (selectedIds.length < 2) {
+      showToast(lang === 'en' ? 'Select at least 2 clips to merge' : 'یکجا کرنے کے لیے کم از کم 2 کلپس منتخب کریں');
+      return;
+    }
+    Alert.alert(
+      t('mergeConfirmTitle', lang),
+      t('mergeConfirmMessage', lang).replace('%d', selectedIds.length.toString()),
+      [
+        { text: t('cancel', lang), style: 'cancel' },
+        {
+          text: t('merge', lang),
+          onPress: async () => {
+            const count = selectedIds.length;
+            await mergeSelectedClips(selectedIds);
+            cancelSelection();
+            showToast(t('mergedSuccess', lang).replace('%d', count.toString()));
+          },
+        },
+      ]
+    );
+  };
+
+  const exportClips = async (format: 'txt' | 'csv' | 'pdf' | 'word') => {
+    try {
+      let dataToExport = [];
+      if (selectionMode && selectedIds.length > 0) {
+          const all = await DatabaseService.getAllForExport();
+          dataToExport = all.filter(c => selectedIds.includes(c.id));
+      } else {
+          dataToExport = await DatabaseService.getAllForExport();
+      }
+
+      if (!dataToExport.length) {
         Alert.alert(lang === 'en' ? 'Empty' : 'خالی', lang === 'en' ? 'No clips to export.' : 'ایکسپورٹ کے لیے کوئی کلپ نہیں ہے۔');
         return;
       }
 
-      if (format === 'txt') await Exporter.exportTXT(all);
-      if (format === 'csv') await Exporter.exportCSV(all);
-      if (format === 'pdf') await Exporter.exportPDF(all);
+      if (format === 'txt') await Exporter.exportTXT(dataToExport);
+      if (format === 'csv') await Exporter.exportCSV(dataToExport);
+      if (format === 'pdf') await Exporter.exportPDF(dataToExport);
+      if (format === 'word') await Exporter.exportWord(dataToExport);
 
       setShowExport(false);
+      if (selectionMode) cancelSelection();
     } catch (err) {
       Alert.alert(lang === 'en' ? 'Export Failed' : 'ایکسپورٹ ناکام', getErrorMessage(err));
     }
@@ -419,7 +579,13 @@ export default function HomeScreen() {
           return (
             <TouchableOpacity
               style={[styles.catChip, active && { backgroundColor: color, borderColor: color }]}
-              onPress={() => setCategory(item)}
+              onPress={() => {
+                if (item === 'Sensitive' && settings.pinLockEnabled) {
+                  setPinPromptVisible(true);
+                } else {
+                  setCategory(item);
+                }
+              }}
               activeOpacity={0.8}
             >
               <Text style={[styles.catChipText, active && { color: '#fff' }]}>
@@ -438,6 +604,7 @@ export default function HomeScreen() {
       <View style={{ flex: 1, width: '100%' }}>
       <FlashList
         data={clips}
+        extraData={{ selectedIds, selectionMode, maskSensitive }}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.clipList}
         estimatedItemSize={150}
@@ -455,7 +622,17 @@ export default function HomeScreen() {
             colors={[T.accent]}
           />
         }
-        ListEmptyComponent={<EmptyState search={search} lang={lang} T={T} />}
+        ListEmptyComponent={
+          loading ? (
+            <View style={{ paddingTop: 10 }}>
+              <SkeletonCard T={T} />
+              <SkeletonCard T={T} />
+              <SkeletonCard T={T} />
+            </View>
+          ) : (
+            <EmptyState search={search} lang={lang} T={T} />
+          )
+        }
         renderItem={({ item }) => (
           <ClipCard
             clip={item}
@@ -468,10 +645,69 @@ export default function HomeScreen() {
             onMarkNormal={handleMarkNormal}
             lang={lang}
             T={T}
+            selectionMode={selectionMode}
+            selected={selectedIds.includes(item.id)}
+            onSelect={() => toggleSelection(item.id)}
+            onLongPressCard={() => handleLongPressCard(item.id)}
           />
         )}
+        onEndReached={() => {
+          void loadMoreClips();
+        }}
+        onEndReachedThreshold={0.4}
+        ListFooterComponent={
+          isLoadingMore ? (
+            <View style={{ paddingVertical: 18, alignItems: 'center', justifyContent: 'center' }}>
+              <ActivityIndicator size="small" color={T.accent} />
+            </View>
+          ) : null
+        }
       />
       </View>
+
+      {/* Bulk Action Bar */}
+      {selectionMode && (
+        <View style={styles.bulkActionBar}>
+          <TouchableOpacity onPress={cancelSelection} style={{ padding: 10, marginRight: 10 }}>
+            <Text style={{ color: T.text, fontSize: 16 }}>✕</Text>
+          </TouchableOpacity>
+          <Text style={{ color: T.text, fontSize: 16, fontWeight: 'bold', marginRight: 15 }}>
+            {selectedIds.length} {lang === 'en' ? 'selected' : 'منتخب'}
+          </Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 18, alignItems: 'center' }}>
+            <TouchableOpacity onPress={handleBulkMerge} accessibilityLabel="Merge Clips">
+              <Text style={{ color: T.accent, fontSize: 24 }}>📑</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => void exportClips('pdf')} accessibilityLabel="Export PDF">
+              <Text style={{ color: T.text, fontSize: 22 }}>📄</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => void exportClips('word')} accessibilityLabel="Export Word">
+              <Text style={{ color: T.text, fontSize: 22 }}>📝</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => void exportClips('csv')} accessibilityLabel="Export CSV">
+              <Text style={{ color: T.text, fontSize: 22 }}>📊</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleBulkCopy}>
+              <Text style={{ color: T.text, fontSize: 24 }}>📋</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleBulkShare}>
+              <Text style={{ color: T.text, fontSize: 24 }}>📤</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setShowExport(true)}>
+              <Text style={{ color: T.text, fontSize: 24 }}>📥</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleBulkFav}>
+              <Text style={{ color: T.amber, fontSize: 24 }}>⭐</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleBulkPin}>
+              <Text style={{ color: T.amber, fontSize: 24 }}>📌</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={handleBulkDelete}>
+              <Text style={{ color: T.red, fontSize: 24 }}>🗑️</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      )}
 
       {/* Export Modal */}
       <Modal visible={showExport} transparent animationType="slide" onRequestClose={() => setShowExport(false)}>
@@ -483,6 +719,7 @@ export default function HomeScreen() {
               { format: 'txt' as const, label: t('exportTxt', lang), desc: t('exportTxtDesc', lang) },
               { format: 'csv' as const, label: t('exportCsv', lang), desc: t('exportCsvDesc', lang) },
               { format: 'pdf' as const, label: t('exportPdf', lang), desc: t('exportPdfDesc', lang) },
+              { format: 'word' as const, label: t('exportWord', lang), desc: t('exportWordDesc', lang) },
             ].map(e => (
               <TouchableOpacity key={e.format} style={styles.modalBtn} onPress={() => void exportClips(e.format)}>
                 <Text style={styles.modalBtnText}>{e.label}</Text>
@@ -497,34 +734,38 @@ export default function HomeScreen() {
       </Modal>
 
       {/* Floating Action Button */}
-      <TouchableOpacity
-        style={[
-          styles.fab,
-          {
-            backgroundColor: T.accent,
-            shadowColor: T.accent,
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.4,
-            shadowRadius: 8,
-            elevation: 6,
-          }
-        ]}
-        onPress={handleOpenAdd}
-        activeOpacity={0.8}
-      >
-        <Text style={styles.fabIcon}>＋</Text>
-      </TouchableOpacity>
+      {!selectionMode && (
+        <TouchableOpacity
+          style={[
+            styles.fab,
+            {
+              backgroundColor: T.accent,
+              shadowColor: T.accent,
+              shadowOffset: { width: 0, height: 4 },
+              shadowOpacity: 0.4,
+              shadowRadius: 8,
+              elevation: 6,
+            }
+          ]}
+          onPress={handleOpenAdd}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.fabIcon}>＋</Text>
+        </TouchableOpacity>
+      )}
 
       {/* Add/Edit Modal */}
       <Modal visible={editorVisible} transparent animationType="slide" onRequestClose={() => setEditorVisible(false)}>
-        <View style={styles.modalBg}>
-          <View style={[styles.modalCard, { borderTopWidth: 1, borderColor: T.border }]}>
+        <KeyboardAvoidingView 
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'} 
+          style={styles.modalBg}
+        >
+          <View style={[styles.modalCard, { borderTopWidth: 1, borderColor: T.border, maxHeight: '80%' }]}>
             <Text style={styles.modalTitle}>
               {editingClip
                 ? (lang === 'en' ? 'Edit Clip' : 'کلپ ترمیم کریں')
                 : (lang === 'en' ? 'New Clip' : 'نیا کلپ لکھیں')}
             </Text>
-            
             <TextInput
               style={{
                 backgroundColor: `${T.bg}bb`,
@@ -535,6 +776,7 @@ export default function HomeScreen() {
                 padding: 14,
                 fontSize: 15,
                 minHeight: 120,
+                maxHeight: 250,
                 textAlignVertical: 'top',
                 fontFamily: lang === 'ur' ? NASTALEEQ_FONT : undefined,
                 marginBottom: 16,
@@ -546,6 +788,18 @@ export default function HomeScreen() {
               onChangeText={setEditorText}
               autoFocus
             />
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, paddingHorizontal: 4 }}>
+              <Text style={{ color: T.text, fontSize: 15, fontFamily: lang === 'ur' ? NASTALEEQ_FONT : undefined }}>
+                {lang === 'en' ? 'Save as Template' : 'ٹیمپلیٹ کے طور پر محفوظ کریں'}
+              </Text>
+              <Switch
+                value={isTemplate}
+                onValueChange={setIsTemplate}
+                trackColor={{ false: T.border, true: T.accent }}
+                thumbColor={T.surface}
+              />
+            </View>
 
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <TouchableOpacity
@@ -564,8 +818,47 @@ export default function HomeScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
+
+      {/* PIN Prompt Modal */}
+      <PinManagerModal
+        visible={pinPromptVisible}
+        mode="confirm"
+        lang={lang}
+        T={T}
+        currentPinHash={settings.pinHash || ''}
+        onSuccess={() => {
+          setPinPromptVisible(false);
+          setCategory('Sensitive');
+        }}
+        onCancel={() => setPinPromptVisible(false)}
+      />
+
+      {/* Play Store In-App Review Prompt Modal */}
+      <ReviewPromptModal
+        visible={reviewPromptVisible}
+        lang={lang}
+        T={T}
+        onRateNow={handleRateNow}
+        onLater={handleReviewLater}
+        onAlreadyReviewed={handleAlreadyReviewed}
+      />
+
+      {/* Undo Delete Snackbar */}
+      {lastDeletedClip && (
+        <View style={styles.undoSnackbar}>
+          <Text style={styles.undoText}>
+            {lang === 'en' ? 'Clip deleted' : 'کلپ حذف ہو گئی'}
+          </Text>
+          <TouchableOpacity style={styles.undoBtn} onPress={() => void handleUndoDelete()}>
+            <Text style={styles.undoBtnText}>
+              {lang === 'en' ? 'UNDO' : 'منسوخ کریں'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
     </View>
   );
 }
@@ -654,7 +947,22 @@ const getStyles = (T: ThemeColors, lang: AppLanguage) => {
 
 
   // Modal
-  modalBg: { flex: 1, backgroundColor: '#000000bb', justifyContent: 'flex-end' },
+    bulkActionBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingHorizontal: 20,
+      paddingVertical: 15,
+      backgroundColor: T.surface,
+      borderTopWidth: 1,
+      borderColor: T.border,
+      position: 'absolute',
+      bottom: 0,
+      left: 0,
+      right: 0,
+      elevation: 10,
+    },
+    modalBg: { flex: 1, backgroundColor: '#000000bb', justifyContent: 'flex-end' },
   modalCard: {
     backgroundColor: T.surface,
     borderTopLeftRadius: 20,
@@ -733,5 +1041,27 @@ const getStyles = (T: ThemeColors, lang: AppLanguage) => {
     fontWeight: 'bold',
     marginTop: -2,
   },
+
+  // Undo Snackbar
+  undoSnackbar: {
+    position: 'absolute',
+    bottom: 86,
+    left: 18,
+    right: 18,
+    backgroundColor: T.surface,
+    borderRadius: 14,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: `${T.accent}66`,
+    zIndex: 998,
+  },
+  undoText: { color: T.text, fontSize: 14, ...ff },
+  undoBtn: { backgroundColor: T.accent, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 7 },
+  undoBtnText: { color: '#ffffff', fontSize: 13, fontWeight: '800', ...ff },
 });
 };

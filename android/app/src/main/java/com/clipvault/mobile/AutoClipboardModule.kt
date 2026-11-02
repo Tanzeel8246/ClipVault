@@ -8,6 +8,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.ReadableArray
 
 class AutoClipboardModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
@@ -156,9 +157,9 @@ class AutoClipboardModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun updateClipText(id: String, text: String, promise: Promise) {
+  fun updateClipText(id: String, text: String, category: String, sensitive: Boolean, promise: Promise) {
     try {
-      promise.resolve(NativeClipStore.updateText(reactContext, id, text))
+      promise.resolve(NativeClipStore.updateText(reactContext, id, text, category, sensitive))
     } catch (error: Throwable) {
       promise.reject("CLIP_UPDATE_FAILED", error.message, error)
     }
@@ -171,6 +172,48 @@ class AutoClipboardModule(private val reactContext: ReactApplicationContext) :
       promise.resolve(true)
     } catch (error: Throwable) {
       promise.reject("CLIP_DELETE_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun bulkDeleteClips(idsArray: ReadableArray, promise: Promise) {
+    try {
+      val ids = mutableListOf<String>()
+      for (i in 0 until idsArray.size()) {
+        idsArray.getString(i)?.let { ids.add(it) }
+      }
+      NativeClipStore.bulkDelete(reactContext, ids)
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("BULK_DELETE_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun bulkPinClips(idsArray: ReadableArray, value: Boolean, promise: Promise) {
+    try {
+      val ids = mutableListOf<String>()
+      for (i in 0 until idsArray.size()) {
+        idsArray.getString(i)?.let { ids.add(it) }
+      }
+      NativeClipStore.bulkPin(reactContext, ids, value)
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("BULK_PIN_FAILED", error.message, error)
+    }
+  }
+
+  @ReactMethod
+  fun bulkFavoriteClips(idsArray: ReadableArray, value: Boolean, promise: Promise) {
+    try {
+      val ids = mutableListOf<String>()
+      for (i in 0 until idsArray.size()) {
+        idsArray.getString(i)?.let { ids.add(it) }
+      }
+      NativeClipStore.bulkFavorite(reactContext, ids, value)
+      promise.resolve(true)
+    } catch (error: Throwable) {
+      promise.reject("BULK_FAVORITE_FAILED", error.message, error)
     }
   }
 

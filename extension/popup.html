@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ur">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ClipVault Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Noto+Nastaliq+Urdu:wght@400;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-container">
+        <div class="logo-icon">CV</div>
+        <div class="logo-text">
+          <h1>ClipVault</h1>
+          <span class="sub-text" data-i18n="sub_text">ساتھی ایکسٹینشن</span>
+        </div>
+      </div>
+      <div class="header-status">
+        <button id="langToggleBtn" class="lang-toggle-btn">EN</button>
+        <span class="status-indicator online" id="syncStatusIndicator"></span>
+        <span class="status-text" id="syncStatusText" data-i18n="local_mode">لوکل موڈ</span>
+      </div>
+    </header>
+
+    <!-- Main Tabs/Navigation -->
+    <nav class="app-nav">
+      <button class="nav-btn active" id="btnCustomizer" data-tab="tab-customizer" data-i18n="tab_customizer">اردو کسٹمائزر</button>
+      <button class="nav-btn" id="btnClips" data-tab="tab-clips" data-i18n="tab_clips">کلپ ہسٹری</button>
+      <button class="nav-btn" id="btnSync" data-tab="tab-sync" data-i18n="tab_sync">گوگل ڈرائیو سنک</button>
+      <button class="nav-btn" id="btnCapture" data-tab="tab-capture" data-i18n="tab_capture">اسکرین کیپچر</button>
+    </nav>
+
+    <!-- Content Sections -->
+    <main class="app-content">
+      
+      <!-- TAB 1: Urdu Web Customizer -->
+      <section id="tab-customizer" class="tab-pane active">
+        <div class="card toggle-card">
+          <div class="card-row">
+            <div>
+              <h3 data-i18n="customizer_title">اردو ویب کسٹمائزر</h3>
+              <p class="card-desc" data-i18n="customizer_desc">ویب سائٹوں پر اردو تحریر کا انداز اور سائز تبدیل کریں</p>
+            </div>
+            <label class="switch">
+              <input type="checkbox" id="customizerToggle" checked>
+              <span class="slider round"></span>
+            </label>
+          </div>
+        </div>
+
+        <div id="customizerSettingsPanel" class="settings-panel">
+          <div class="card font-select-card">
+            <label for="fontSelect" data-i18n="select_font">اردو فونٹ منتخب کریں</label>
+            <div class="select-wrapper">
+              <select id="fontSelect">
+                <option value="jameel_noori" style="font-family: 'Jameel Noori Nastaleeq', 'Noto Nastaliq Urdu', serif;">جمیل نوری نستعلیق (لوکل)</option>
+                <option value="jameel_kasheeda" style="font-family: 'Jameel Noori Kasheeda', 'Noto Nastaliq Urdu', serif;">جمیل نوری کشیدہ (لوکل)</option>
+                <option value="noto_nastaliq" style="font-family: 'Noto Nastaliq Urdu', serif;" selected>نوٹو نستعلیق اردو</option>
+                <option value="gulzar" style="font-family: 'Gulzar', serif;">گلزار (بہاؤ نستعلیق)</option>
+                <option value="amiri" style="font-family: 'Amiri', serif;">امیری (کلاسک نسخ)</option>
+                <option value="noto_sans_arabic" style="font-family: 'Noto Sans Arabic', sans-serif;">نوٹو سنس عربک</option>
+                <option value="aref_ruqaa" style="font-family: 'Aref Ruqaa', serif;">عارف رقعہ (خطاطی)</option>
+                <option value="reem_kufi" style="font-family: 'Reem Kufi', sans-serif;">ریم کوفی (ہندسی کوفی)</option>
+                <option value="lalezar" style="font-family: 'Lalezar', sans-serif;">لالہ زار (بولڈ سرخی)</option>
+                <option value="nafees" style="font-family: 'Nafees Web Naskh', serif;">نفیس ویب نسخ</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card slider-card">
+            <div class="slider-header">
+              <span data-i18n="font_size">فونٹ کا سائز (Font Size)</span>
+              <span class="slider-value" id="fontSizeVal">22px</span>
+            </div>
+            <input type="range" id="fontSizeSlider" min="16" max="48" value="22" class="range-slider">
+          </div>
+
+          <div class="card slider-card">
+            <div class="slider-header">
+              <span data-i18n="line_height">لائنوں کا درمیانی فاصلہ (Line Height)</span>
+              <span class="slider-value" id="lineHeightVal">1.8</span>
+            </div>
+            <input type="range" id="lineHeightSlider" min="1.0" max="3.0" step="0.1" value="1.8" class="range-slider">
+          </div>
+
+          <!-- Interactive Live Preview Box -->
+          <div class="card preview-card">
+            <span class="preview-label" data-i18n="preview_label">پیش نظارہ (Preview)</span>
+            <div class="preview-box" id="urduPreviewBox" data-i18n="preview_text">
+              یہاں منتخب کردہ فونٹ، سائز اور لائن ہائٹ کا لائیو مظاہرہ دیکھیں۔ کلپ والٹ آپ کی پسند کے مطابق تمام ویب سائٹس پر اردو کے بہترین فونٹس لاگو کرتا ہے۔
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 2: Clipboard History -->
+      <section id="tab-clips" class="tab-pane">
+        <div class="search-bar">
+          <input type="text" id="searchClipsInput" placeholder="کلپ تلاش کریں..." data-i18n-placeholder="search_clips">
+          <button class="clear-search-btn" id="btnClearSearch" style="display: none;">&times;</button>
+        </div>
+
+        <div class="category-filters" id="categoryFilters">
+          <button class="filter-chip active" data-category="all" data-i18n="filter_all">تمام</button>
+          <button class="filter-chip" data-category="text" data-i18n="filter_text">ٹیکسٹ</button>
+          <button class="filter-chip" data-category="url" data-i18n="filter_url">لنکس</button>
+          <button class="filter-chip" data-category="contact" data-i18n="filter_contact">رابطہ</button>
+          <button class="filter-chip" data-category="favorite" data-i18n="filter_favorite">ستارہ ⭐</button>
+        </div>
+
+        <div class="clips-header">
+          <span class="clips-count" id="clipsCountText" data-i18n="no_clips">کوئی کلپ موجود نہیں ہے</span>
+          <button class="btn btn-secondary btn-sm" id="btnClearAllClips" data-i18n="clear_all">تمام صاف کریں</button>
+        </div>
+
+        <div class="clips-container" id="clipsListContainer">
+          <!-- Dynamically populated clips list -->
+          <div class="empty-state">
+            <div class="empty-icon">📋</div>
+            <p data-i18n="empty_clips_1">ابھی تک کوئی کلپ محفوظ نہیں کیا گیا۔</p>
+            <p class="sub" data-i18n="empty_clips_2">ویب سائٹ پر کچھ بھی کاپی کریں، وہ خود بخود یہاں محفوظ ہو جائے گا!</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- TAB 3: Google Drive Sync -->
+      <section id="tab-sync" class="tab-pane">
+        <!-- Auth Details State Card -->
+        <div class="card auth-card" id="authCard">
+          <div class="auth-status-icon">
+            <div class="cloud-icon disconnected" id="cloudIcon">☁️</div>
+          </div>
+          
+          <div class="auth-info">
+            <h3 id="authTitle" data-i18n="secure_sync">محفوظ کلاؤڈ سنک</h3>
+            <p id="authSubtitle" class="card-desc" data-i18n="sync_desc">اپنے موبائل ایپ کے ساتھ کلپس کو ہم آہنگ (Sync) کریں</p>
+            
+            <div class="user-details" id="userDetails" style="display: none;">
+              <span class="user-email" id="userEmailText">example@gmail.com</span>
+              <span class="sync-time" id="lastSyncText">آخری بار بیک اپ: نامعلوم</span>
+            </div>
+          </div>
+
+          <div class="auth-actions">
+            <!-- Disconnected State -->
+            <div id="loggedOutActions">
+              <div class="client-id-accordion">
+                <button class="accordion-header" id="btnToggleClientId" data-i18n="adv_settings">ترقی یافتہ ترتیبات (Redirect URI)</button>
+                <div class="accordion-content" id="clientIdContainer" style="display: none;">
+                  <p class="help-text" data-i18n="auth_redirect">Authorized Redirect URI (گوگل کلاؤڈ کنسول کے لیے کاپی کریں):</p>
+                  <div class="uri-copy-container" style="display:flex;gap:4px;margin-bottom:2px;">
+                    <input type="text" id="redirectUriInput" class="custom-input" style="flex:1;font-size:8.5px;" readonly>
+                    <button class="btn btn-secondary btn-xs" id="btnCopyRedirectUri" style="padding:4px 6px;" data-i18n="copy">کاپی</button>
+                  </div>
+                </div>
+              </div>
+              <button class="btn btn-primary btn-block" id="btnGoogleLogin" data-i18n="connect_google">گوگل اکاؤنٹ سے منسلک کریں</button>
+            </div>
+
+            <!-- Expired State -->
+            <div id="expiredActions" style="display: none;">
+              <div class="alert alert-warning" style="background: rgba(245, 158, 11, 0.1); border: 1px solid var(--warning); border-radius: 6px; padding: 10px; margin-bottom: 12px; font-size: 11px; line-height: 1.5;">
+                <strong style="color: var(--warning);">سیشن ختم ہو گیا ہے:</strong> گوگل کی سیکیورٹی کے مطابق آپ کا کنکشن ایکسپائر ہو چکا ہے۔ برائے مہربانی دوبارہ منسلک کریں۔
+              </div>
+              <button class="btn btn-primary btn-block" id="btnGoogleReconnect">دوبارہ منسلک کریں (Reconnect)</button>
+              <button class="btn btn-danger btn-block btn-outline" id="btnGoogleLogoutExpired" style="margin-top:8px;" data-i18n="disconnect">منقطع کریں (Sign Out)</button>
+            </div>
+
+            <!-- Connected State -->
+            <div id="loggedInActions" style="display: none;">
+              <div class="action-grid">
+                <button class="btn btn-success" id="btnBackupNow" data-i18n="upload_backup">بیک اپ اپلوڈ کریں 📤</button>
+                <button class="btn btn-info" id="btnRestoreNow" data-i18n="download_backup">بیک اپ ڈاؤن لوڈ کریں 📥</button>
+              </div>
+              <button class="btn btn-danger btn-block btn-outline" id="btnGoogleLogout" data-i18n="disconnect">منقطع کریں (Sign Out)</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card info-card">
+          <h4 data-i18n="how_sync_works">موبائل ایپ سنک کیسے کام کرتا ہے؟</h4>
+          <p class="card-desc" data-i18n="sync_info">یہ ایکسٹینشن گوگل ڈرائیو کے پوشیدہ فولڈر (App Data Folder) کو استعمال کرتی ہے۔ جو بھی کلپ آپ کمپیوٹر پر کاپی کریں گے، وہ اس فولڈر میں اپلوڈ ہو جائے گا اور آپ کے موبائل کی کلپ والٹ ایپ اسے خود بخود ڈاؤن لوڈ کر لے گی۔</p>
+        </div>
+      </section>
+
+      <!-- TAB 4: Screen Capture & Recording -->
+      <section id="tab-capture" class="tab-pane">
+        <div class="card capture-card" style="border-left: 3px solid var(--primary);">
+          <h3 data-i18n="screenshot_title">سکرین شاٹ (Take Screenshot)</h3>
+          <p class="card-desc" data-i18n="screenshot_desc">اپنے فعال براؤزر ٹیب کا فوری اسکرین شاٹ لے کر ڈاؤن لوڈ کریں</p>
+          <button class="btn btn-primary btn-block" id="btnTakeScreenshot" style="margin-top: 10px;" data-i18n="btn_screenshot">فوری اسکرین شاٹ لیں 📸</button>
+        </div>
+
+        <div class="card capture-card" id="recordingCard" style="border-left: 3px solid var(--success);">
+          <h3 data-i18n="recording_title">سکرین ریکارڈنگ (Video Recording)</h3>
+          <p class="card-desc" data-i18n="recording_desc">سسٹم کی آواز اور مائیکروفون کے ساتھ سکرین ویڈیو ریکارڈ کریں</p>
+          
+          <div class="recording-status" id="recordingStatusContainer" style="display: none; align-items: center; justify-content: center; gap: 8px; margin: 12px 0; background: rgba(239, 68, 68, 0.1); border: 1px dashed var(--danger); padding: 8px; border-radius: 8px;">
+            <span class="status-indicator" style="width: 8px; height: 8px; border-radius: 50%; display: inline-block; background-color: var(--danger); box-shadow: 0 0 6px var(--danger); animation: pulse-sync 1s infinite;"></span>
+            <span style="font-size: 11px; font-weight: 600; color: var(--text-primary);" data-i18n="recording_active">ریکارڈنگ جاری ہے...</span>
+            <span id="recordingTimer" style="font-size: 11px; color: var(--text-secondary); margin-left: auto;">00:00</span>
+          </div>
+
+          <div class="action-grid" style="margin-top: 10px;">
+            <button class="btn btn-success" id="btnStartRecording" data-i18n="start_recording">ریکارڈنگ شروع کریں ⏺️</button>
+            <button class="btn btn-danger" id="btnStopRecording" disabled data-i18n="stop_recording">ریکارڈنگ روکیں ⏹️</button>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Toast Notification Overlay -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Footer -->
+    <footer class="app-footer-nav">
+      <span>ورژن 1.0.0</span>
+      <span>محفوظ اور نجی (ClipVault)</span>
+    </footer>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

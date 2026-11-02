@@ -22,6 +22,7 @@ export interface ClipItem {
   extractedEntities?: string[];
   detectedLanguage?: string;
   summary?: string;
+  history?: string[];
 }
 
 export interface ClipStats {
@@ -33,7 +34,7 @@ export interface ClipStats {
 }
 
 export type AutoDeleteSetting = 'never' | '7d' | '30d' | '90d';
-export type ThemeSetting = 'CLASSIC_DARK' | 'SOFT_IVORY' | 'OCEAN_BLUE' | 'FOREST_GREEN' | 'NEON_GLASS' | 'MIDNIGHT_GOLD' | 'GRAPHITE' | 'ROYAL_PURPLE' | 'SUNSET_ORANGE' | 'ROSE_PETAL';
+export type ThemeSetting = 'CLASSIC_DARK' | 'SOFT_IVORY' | 'OCEAN_BLUE' | 'FOREST_GREEN' | 'NEON_GLASS' | 'MIDNIGHT_GOLD' | 'GRAPHITE' | 'ROYAL_PURPLE' | 'SUNSET_ORANGE' | 'ROSE_PETAL' | 'SYSTEM';
 export type MaxClipsSetting = '500' | '1000' | 'unlimited';
 export type AutoMonitorMinutes = 0 | 15 | 30 | 60 | 120;  // 0 = unlimited
 export type SensitiveExpiry = 'never' | '30s' | '5m' | 'session';
@@ -60,6 +61,8 @@ export interface ClipSettings {
   keyboardHeight: number;
   keyboardFontSize: number;
   geminiApiKey: string;
+  pinHash?: string;
+  syncPassword?: string;
 }
 
 export const SETTINGS_KEY = 'clipvault_settings';

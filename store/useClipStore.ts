@@ -7,6 +7,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
+import * as SecureStore from 'expo-secure-store';
 import { create } from 'zustand';
 import { NativeModules } from 'react-native';
 import { DatabaseService, SensitiveDetector, LocalAIProcessor, Categorizer } from '../services/CoreServices';
@@ -29,6 +30,8 @@ interface ClipStoreState {
   // Loading
   isLoading: boolean;
   isRefreshing: boolean;
+  isLoadingMore: boolean;
+  hasMore: boolean;
   error: string;
 
   // Toast
@@ -41,7 +44,9 @@ interface ClipStoreState {
 
   // Actions — Clips
   loadClips: () => Promise<void>;
+  loadMoreClips: () => Promise<void>;
   refreshClips: () => Promise<void>;
+  mergeSelectedClips: (ids: string[]) => Promise<void>;
   setSearch: (search: string) => void;
   setCategory: (category: string) => void;
   favoriteClip: (id: string, value: boolean) => Promise<void>;
@@ -49,9 +54,12 @@ interface ClipStoreState {
   deleteClip: (id: string) => Promise<void>;
   clearAll: () => Promise<void>;
   clearSensitive: () => Promise<number>;
-  addClip: (text: string) => Promise<void>;
-  updateClipText: (id: string, text: string) => Promise<void>;
+  addClip: (text: string, forceCategory?: string) => Promise<void>;
+  updateClipText: (id: string, text: string, forceCategory?: string) => Promise<void>;
   toggleSensitive: (id: string, value: boolean) => Promise<void>;
+  bulkDelete: (ids: string[]) => Promise<void>;
+  bulkPin: (ids: string[], value: boolean) => Promise<void>;
+  bulkFavorite: (ids: string[], value: boolean) => Promise<void>;
 
   // Actions — Toast
   showToast: (message: string) => void;
@@ -82,6 +90,8 @@ export const useClipStore = create<ClipStoreState>((set, get) => ({
   activeCategory: 'All',
   isLoading: false,
   isRefreshing: false,
+  isLoadingMore: false,
+  hasMore: true,
   error: '',
   toastMessage: '',
   toastVisible: false,
@@ -90,9 +100,56 @@ export const useClipStore = create<ClipStoreState>((set, get) => ({
   loadSettings: async () => {
     try {
       const saved = await AsyncStorage.getItem(SETTINGS_KEY);
-      if (saved) {
-        set({ settings: { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } });
+      let parsed = saved ? JSON.parse(saved) : {};
+      
+      let needsMigration = false;
+      let secureApiKey = '';
+      let securePinHash = '';
+      let secureSyncPassword = '';
+
+      // SecureStore migration for geminiApiKey
+      if (parsed.geminiApiKey) {
+        secureApiKey = parsed.geminiApiKey;
+        await SecureStore.setItemAsync('secure_geminiApiKey', secureApiKey);
+        delete parsed.geminiApiKey;
+        needsMigration = true;
+      } else {
+        secureApiKey = (await SecureStore.getItemAsync('secure_geminiApiKey')) || '';
       }
+
+      // SecureStore migration for pinHash
+      if (parsed.pinHash) {
+        securePinHash = parsed.pinHash;
+        await SecureStore.setItemAsync('secure_pinHash', securePinHash);
+        delete parsed.pinHash;
+        needsMigration = true;
+      } else {
+        securePinHash = (await SecureStore.getItemAsync('secure_pinHash')) || '';
+      }
+
+      // SecureStore migration for syncPassword
+      if (parsed.syncPassword) {
+        secureSyncPassword = parsed.syncPassword;
+        await SecureStore.setItemAsync('secure_syncPassword', secureSyncPassword);
+        delete parsed.syncPassword;
+        needsMigration = true;
+      } else {
+        secureSyncPassword = (await SecureStore.getItemAsync('secure_syncPassword')) || '';
+      }
+
+      if (needsMigration) {
+        await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(parsed));
+      }
+
+      const settingsState = { 
+        ...DEFAULT_SETTINGS, 
+        ...parsed, 
+        geminiApiKey: secureApiKey,
+        pinHash: securePinHash,
+        syncPassword: secureSyncPassword
+      };
+
+      set({ settings: settingsState });
     } catch {
       set({ settings: DEFAULT_SETTINGS });
     }
@@ -101,7 +158,19 @@ export const useClipStore = create<ClipStoreState>((set, get) => ({
   updateSetting: async (key, value) => {
     const updated = { ...get().settings, [key]: value };
     set({ settings: updated });
-    await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(updated));
+    
+    if (key === 'geminiApiKey' || key === 'pinHash' || key === 'syncPassword') {
+      if (value) {
+        await SecureStore.setItemAsync(`secure_${key}`, value as string);
+      } else {
+        await SecureStore.deleteItemAsync(`secure_${key}`);
+      }
+    }
+
+    // Save non-secure settings to AsyncStorage
+    const { geminiApiKey, pinHash, syncPassword, ...safeSettings } = updated;
+    await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(safeSettings));
+    
     if (key === 'theme' && FileSystem.documentDirectory) {
       await FileSystem.writeAsStringAsync(FileSystem.documentDirectory + 'theme.txt', value as string);
     }
@@ -117,31 +186,75 @@ export const useClipStore = create<ClipStoreState>((set, get) => ({
   // ── Clips ─────────────────────────────────────────────────
   loadClips: async () => {
     const { search, activeCategory } = get();
-    set({ isLoading: true, error: '' });
+    set({ isLoading: true, error: '', hasMore: true });
     try {
       const [data, stats] = await Promise.all([
-        DatabaseService.getClips({ search, category: activeCategory }),
+        DatabaseService.getClips({ search, category: activeCategory, limit: 60, offset: 0 }),
         DatabaseService.getStats(),
       ]);
       const enrichedData = data.map(clip => LocalAIProcessor.enrichClip(clip));
-      set({ clips: enrichedData, stats, isLoading: false });
+      set({ clips: enrichedData, stats, isLoading: false, hasMore: data.length >= 60 });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Load failed', isLoading: false });
     }
   },
 
+  loadMoreClips: async () => {
+    const { search, activeCategory, clips, isLoadingMore, hasMore, isLoading } = get();
+    if (isLoadingMore || !hasMore || isLoading) return;
+
+    set({ isLoadingMore: true });
+    try {
+      const moreData = await DatabaseService.getClips({
+        search,
+        category: activeCategory,
+        limit: 60,
+        offset: clips.length,
+      });
+
+      if (moreData.length === 0) {
+        set({ isLoadingMore: false, hasMore: false });
+        return;
+      }
+
+      const existingIds = new Set(clips.map(c => c.id));
+      const newItems = moreData
+        .filter(c => !existingIds.has(c.id))
+        .map(clip => LocalAIProcessor.enrichClip(clip));
+
+      set({
+        clips: [...clips, ...newItems],
+        isLoadingMore: false,
+        hasMore: moreData.length >= 60,
+      });
+    } catch {
+      set({ isLoadingMore: false });
+    }
+  },
+
   refreshClips: async () => {
     const { search, activeCategory } = get();
-    set({ isRefreshing: true, error: '' });
+    set({ isRefreshing: true, error: '', hasMore: true });
     try {
       const [data, stats] = await Promise.all([
-        DatabaseService.getClips({ search, category: activeCategory }),
+        DatabaseService.getClips({ search, category: activeCategory, limit: 60, offset: 0 }),
         DatabaseService.getStats(),
       ]);
       const enrichedData = data.map(clip => LocalAIProcessor.enrichClip(clip));
-      set({ clips: enrichedData, stats, isRefreshing: false });
+      set({ clips: enrichedData, stats, isRefreshing: false, hasMore: data.length >= 60 });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Refresh failed', isRefreshing: false });
+    }
+  },
+
+  mergeSelectedClips: async (ids: string[]) => {
+    if (!ids || ids.length < 2) return;
+    const { clips, addClip } = get();
+    const selectedClips = clips.filter(c => ids.includes(c.id));
+    if (selectedClips.length === 0) return;
+    const combinedText = selectedClips.map(c => c.text.trim()).filter(Boolean).join('\n\n───\n\n');
+    if (combinedText.trim()) {
+      await addClip(combinedText);
     }
   },
 
@@ -183,21 +296,36 @@ export const useClipStore = create<ClipStoreState>((set, get) => ({
 
   clearAll: async () => {
     await DatabaseService.clearAll();
-    set({ clips: [] });
-    await get().loadStats();
+    await get().loadClips();
     GoogleDriveBackupService.queueAutoBackup();
   },
 
   clearSensitive: async () => {
-    const count = await DatabaseService.clearSensitive();
-    // Reload to reflect deletions
+    const deletedCount = await DatabaseService.clearSensitive();
     await get().loadClips();
-    return count;
+    GoogleDriveBackupService.queueAutoBackup();
+    return deletedCount;
   },
 
-  addClip: async (text: string) => {
+  bulkDelete: async (ids: string[]) => {
+    await DatabaseService.bulkDelete(ids);
+    await get().loadClips();
+    GoogleDriveBackupService.queueAutoBackup();
+  },
+  
+  bulkPin: async (ids: string[], value: boolean) => {
+    await DatabaseService.bulkPin(ids, value);
+    await get().loadClips();
+  },
+  
+  bulkFavorite: async (ids: string[], value: boolean) => {
+    await DatabaseService.bulkFavorite(ids, value);
+    await get().loadClips();
+  },
+
+  addClip: async (text: string, forceCategory?: string) => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const category = Categorizer.detect(text);
+    const category = forceCategory || Categorizer.detect(text);
     const detection = SensitiveDetector.detect(text);
     const clip: ClipItem = {
       id,
@@ -216,8 +344,11 @@ export const useClipStore = create<ClipStoreState>((set, get) => ({
     GoogleDriveBackupService.queueAutoBackup();
   },
 
-  updateClipText: async (id: string, text: string) => {
-    await DatabaseService.updateClipText(id, text);
+  updateClipText: async (id: string, newText: string, forceCategory?: string) => {
+    const category = forceCategory || Categorizer.detect(newText);
+    const detection = SensitiveDetector.detect(newText);
+    
+    await DatabaseService.updateClipText(id, newText, category, detection.isSensitive);
     await get().loadClips();
     GoogleDriveBackupService.queueAutoBackup();
   },

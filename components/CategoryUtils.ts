@@ -1,6 +1,6 @@
 import { ThemeColors } from '../theme/colors';
 
-export const CATEGORIES = ['All', 'Text', 'URL', 'Email', 'Phone', 'Code', 'Number', 'Date', 'Short', 'Long Text'];
+export const CATEGORIES = ['All', 'Template', 'Text', 'URL', 'Email', 'Phone', 'Code', 'Number', 'Date', 'Short', 'Long Text'];
 
 export const getCategoryColors = (T: ThemeColors): Record<string, string> => ({
   URL: '#14b8a6',
